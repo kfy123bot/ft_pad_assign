@@ -5,7 +5,7 @@ use warnings;
 use Getopt::Long;
 use File::Basename;
 use FindBin;
-use lib "$FindBin::Bin/lib";
+use lib "$FindBin::Bin/../lib";
 
 use FPAD::Logger;
 use FPAD::Parser;
