@@ -281,9 +281,36 @@ class PDFGen:
             elif side == 'B':
                 c.saveState()
                 c.translate(px + bw/2, py - 2)
-                c.rotate(270); c.drawString(0, -font_size/2, display_name)
+                c.rotate(270); c.drawRightString(0, -font_size/2, display_name)
                 c.restoreState()
-        return coords
+
+            # --- Pin Numbering (1, 5, 10...) and Start Dot (Pin 1) ---
+            num_str = pin['DIE_PAD_NUM'] if mode == 'APR' else pin['PIN_NUM']
+            try:
+                n_int = int(num_str)
+                # 1. Draw Start Dot for Pin 1
+                if n_int == 1:
+                    dot_r = 2
+                    dot_x, dot_y = px + bw/2, py + bh/2
+                    if side == 'L': dot_x += bw + 8
+                    elif side == 'R': dot_x -= 8
+                    elif side == 'T': dot_y -= 8
+                    elif side == 'B': dot_y += bh + 8
+                    c.setFillColor(colors.black)
+                    c.circle(dot_x, dot_y, dot_r, stroke=0, fill=1)
+
+                # 2. Draw Numbering (1, 5, 10...)
+                if n_int == 1 or n_int % 5 == 0:
+                    c.setFont("Helvetica", font_size * 0.7)
+                    c.setFillColor(colors.black)
+                    if side == 'L': c.drawString(bx + 2, py + (bh/2) - (font_size/2), num_str)
+                    elif side == 'R': c.drawRightString(bx - 2, py + (bh/2) - (font_size/2), num_str)
+                    elif side == 'T': c.drawCentredString(px + bw/2, by - font_size, num_str)
+                    elif side == 'B': c.drawCentredString(px + bw/2, by + bh + 2, num_str)
+            except (ValueError, TypeError):
+                pass
+            return coords
+
 
     def _draw_header(self, c, title, width, height):
         c.setLineWidth(1); c.setStrokeColor(colors.black); c.rect(50, height - 85, width - 100, 65)
