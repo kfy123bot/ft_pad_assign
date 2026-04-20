@@ -48,6 +48,14 @@ test_cpp: build
 test_all: test_py test_pl test_cpp
 	@echo "--- All platform tests passed successfully! ---"
 
+# 6. Automation Hook: Test and Sync to GitHub
+sync: test_py
+	@echo "--- Tests passed. Syncing to GitHub ---"
+	git add .
+	@git commit -m "Auto-sync: $$(date +'%Y-%m-%d %H:%M:%S') - update scripts and design" || echo "No changes to commit"
+	git push origin main
+	@echo "--- GitHub synchronization complete ---"
+
 # --- Utility Targets ---
 clean:
 	@echo "Cleaning up generated files and binaries..."
