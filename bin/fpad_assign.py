@@ -314,7 +314,7 @@ class PDFGen:
 
                 # 2. Draw Numbering (1, 5, 10...)
                 if n_int == 1 or n_int % 5 == 0:
-                    c.setFont("Helvetica", font_size * 0.7)
+                    c.setFont("Helvetica", font_size)
                     c.setFillColor(colors.black)
                     if side == 'L': c.drawString(bx + 2, py + (bh/2) - (font_size/2), num_str)
                     elif side == 'R': c.drawRightString(bx - 2, py + (bh/2) - (font_size/2), num_str)
