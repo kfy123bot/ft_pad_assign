@@ -54,6 +54,7 @@ set_io_pad_constraints -side right -pad_names {\
     R_SIG10 \
     VSSIO4 \
     POWERCUT02 \
+    R_ABCD \
     R_SIG11 \
     R_SIG12 \
 }
@@ -75,5 +76,6 @@ set_io_pad_constraints -side top -pad_names {\
     POWERCUT03 \
     T_SIG11 \
     T_SIG12 \
+    T_SIG13 \
 }
 

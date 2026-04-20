@@ -111,15 +111,27 @@ class Parser:
                 self.logger.warn(f"Error parsing Verilog {v_file}: {e}")
 
     def bridge_data(self):
-        self.logger.info("Bridging data and extracting Instance Names...")
+        self.logger.info("Bridging data and re-indexing DIE_PAD_NUM...")
+        pad_idx = 1
         for row in self.data:
-            pn = row['PIN_NAME']
-            if pn == 'NC': continue
-            sn = pn
+            pname = row['PIN_NAME']
+            pname_upper = pname.upper()
+            
+            # --- Re-indexing DIE_PAD_NUM ONLY ---
+            # If NC, set to 0. Otherwise, sequential from 1.
+            if pname_upper == 'NC':
+                row['DIE_PAD_NUM'] = '0'
+            else:
+                row['DIE_PAD_NUM'] = str(pad_idx)
+                pad_idx += 1
+
+            # --- Original Bridging Logic (keep PIN_NUM as is) ---
+            if pname_upper == 'NC': continue
+            sn = pname
             p_mode = False
-            if row['DIRECTION'] in ('P', 'G') or '%' in pn or 'POWERCUT' in pn.upper():
+            if row['DIRECTION'] in ('P', 'G') or '%' in pname or 'POWERCUT' in pname_upper:
                 p_mode = True
-                if '%' in pn: sn = pn.split('%')[-1]
+                if '%' in pname: sn = pname.split('%')[-1]
             if p_mode:
                 if row['IO_CELL_NAME'] == '-': row['IO_CELL_NAME'] = self.v_raw_insts.get(sn, 'NOT_FOUND')
                 row['INST_NAME'] = sn
@@ -291,12 +303,12 @@ class PDFGen:
                 # 1. Draw Start Dot for Pin 1 (Skip for combined inner APR)
                 is_combined_inner_apr = (mode == 'APR' and label_inside)
                 if n_int == 1 and not is_combined_inner_apr:
-                    dot_r = 2
+                    dot_r = 6
                     dot_x, dot_y = px + bw/2, py + bh/2
-                    if side == 'L': dot_x += bw + 8
-                    elif side == 'R': dot_x -= 8
-                    elif side == 'T': dot_y -= 8
-                    elif side == 'B': dot_y += bh + 8
+                    if side == 'L': dot_x += bw + 12
+                    elif side == 'R': dot_x -= 12
+                    elif side == 'T': dot_y -= 12
+                    elif side == 'B': dot_y += bh + 12
                     c.setFillColor(colors.black)
                     c.circle(dot_x, dot_y, dot_r, stroke=0, fill=1)
 
