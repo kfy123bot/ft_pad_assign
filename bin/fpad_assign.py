@@ -280,16 +280,17 @@ class PDFGen:
                 c.restoreState()
             elif side == 'B':
                 c.saveState()
-                c.translate(px + bw/2, py - 2)
-                c.rotate(270); c.drawRightString(0, -font_size/2, display_name)
+                c.translate(px + bw/2, py - 4) # Increase gap and anchor
+                c.rotate(270); c.drawString(0, -font_size/2, display_name) # Use drawString to grow DOWN
                 c.restoreState()
 
             # --- Pin Numbering (1, 5, 10...) and Start Dot (Pin 1) ---
             num_str = pin['DIE_PAD_NUM'] if mode == 'APR' else pin['PIN_NUM']
             try:
                 n_int = int(num_str)
-                # 1. Draw Start Dot for Pin 1
-                if n_int == 1:
+                # 1. Draw Start Dot for Pin 1 (Skip for combined inner APR)
+                is_combined_inner_apr = (mode == 'APR' and label_inside)
+                if n_int == 1 and not is_combined_inner_apr:
                     dot_r = 2
                     dot_x, dot_y = px + bw/2, py + bh/2
                     if side == 'L': dot_x += bw + 8
@@ -306,10 +307,10 @@ class PDFGen:
                     if side == 'L': c.drawString(bx + 2, py + (bh/2) - (font_size/2), num_str)
                     elif side == 'R': c.drawRightString(bx - 2, py + (bh/2) - (font_size/2), num_str)
                     elif side == 'T': c.drawCentredString(px + bw/2, by - font_size, num_str)
-                    elif side == 'B': c.drawCentredString(px + bw/2, by + bh + 2, num_str)
+                    elif side == 'B': c.drawCentredString(px + bw/2, by + 2, num_str) # Fixed numbering position
             except (ValueError, TypeError):
                 pass
-            return coords
+        return coords
 
 
     def _draw_header(self, c, title, width, height):
