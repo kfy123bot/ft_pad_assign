@@ -359,15 +359,39 @@ class Writer:
                 loc = row['LOCATION'].upper()
                 if loc in sides: sides[loc].append(row['INST_NAME'])
             with open(filename, 'w') as f:
-                f.write("# Innovus IO Assignment File\nVersion: 2\n\n")
+                f.write("( globals\n    version = 3\n    io_order = default\n)\n")
+                f.write("( iopad\n")
                 s_map = {'L': 'left', 'B': 'bottom', 'R': 'right', 'T': 'top'}
                 for code in ['L', 'B', 'R', 'T']:
-                    f.write(f"{s_map[code]}:\n")
+                    if not sides[code]: continue
+                    f.write(f"    ( {s_map[code]}\n")
+                    f.write(f"        ( locals ring_number = 1 )\n")
                     for inst in sides[code]:
-                        f.write(f"    (inst name=\"{inst}\" offset=0 orientation=R0 place_status=fixed spacing=0)\n")
-                    f.write("\n")
+                        f.write(f"        ( inst name=\"{inst}\" offset=0 orientation=R0 place_status=fixed spacing=0 )\n")
+                    f.write("    )\n")
+                f.write(")\n")
         except Exception as e:
             self.logger.error(f"Error in writer: {e}")
+
+    def generate_icc2_io(self, filename):
+        self.logger.info(f"Generating ICC2 IO Constraint: {filename}")
+        try:
+            sides = {'L': [], 'B': [], 'R': [], 'T': []}
+            for row in self.parser.data:
+                if row['PIN_NAME'].upper() == 'NC': continue
+                loc = row['LOCATION'].upper()
+                if loc in sides: sides[loc].append(row['INST_NAME'])
+            with open(filename, 'w') as f:
+                f.write("# ICC2 IO Assignment File (Tcl commands)\n\n")
+                s_map = {'L': 'left', 'B': 'bottom', 'R': 'right', 'T': 'top'}
+                for code in ['L', 'B', 'R', 'T']:
+                    if not sides[code]: continue
+                    f.write(f"set_io_pad_constraints -side {s_map[code]} -pad_names {{\\\n")
+                    for inst in sides[code]:
+                        f.write(f"    {inst} \\\n")
+                    f.write("}\n\n")
+        except Exception as e:
+            self.logger.error(f"Error in ICC2 writer: {e}")
 
 # --- Main Logic ---
 def main():
@@ -403,7 +427,8 @@ def main():
     if args.c:
         w = Writer(logger, parser)
         w.generate_completed_list(f"{base}.new")
-        w.generate_innovus_io(f"{base}_chip.const")
+        w.generate_innovus_io(f"{base}_chip.inn.const")
+        w.generate_icc2_io(f"{base}_chip.icc2.const")
 
     if args.apr or args.pkg or args.combined:
         pg = PDFGen(logger, parser)

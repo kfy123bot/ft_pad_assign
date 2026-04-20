@@ -153,14 +153,33 @@ int main(int argc, char* argv[]) {
         for (const auto& r : app.data) { if (r.direction=="I"||r.direction=="O"||r.direction=="B") { if (++ioc > 8) ofs << "[WARN] Consecutive I/O at " << r.pin_num << "\n"; } else ioc=0; }
     }
     if (check) {
-        ofstream ofs(base + "_chip.const"); ofs << "# Innovus IO Assignment File\nVersion: 2\n\n";
+        ofstream ofs(base + "_chip.inn.const");
+        ofs << "( globals\n    version = 3\n    io_order = default\n)\n";
+        ofs << "( iopad\n";
         string ord[]={"L","B","R","T"}, names[]={"left","bottom","right","top"};
         for (int i=0; i<4; ++i) {
-            ofs << names[i] << ":\n";
+            bool has = false; for (const auto& r : app.data) if (r.location==ord[i] && r.pin_name!="NC") { has=true; break; }
+            if (!has) continue;
+            ofs << "    ( " << names[i] << "\n";
+            ofs << "        ( locals ring_number = 1 )\n";
             for (const auto& r : app.data) if (r.location==ord[i] && r.pin_name!="NC")
-                ofs << "    (inst name=\"" << r.inst_name << "\" offset=0 orientation=R0 place_status=fixed spacing=0)\n";
-            ofs << "\n";
+                ofs << "        ( inst name=\"" << r.inst_name << "\" offset=0 orientation=R0 place_status=fixed spacing=0 )\n";
+            ofs << "    )\n";
         }
+        ofs << ")\n";
+        ofs.close();
+
+        ofstream icofs(base + "_chip.icc2.const");
+ icofs << "# ICC2 IO Assignment File (Tcl commands)\n\n";
+        for (int i=0; i<4; ++i) {
+            bool has = false; for (const auto& r : app.data) if (r.location==ord[i] && r.pin_name!="NC") { has=true; break; }
+            if (!has) continue;
+            icofs << "set_io_pad_constraints -side " << names[i] << " -pad_names {\\\n";
+            for (const auto& r : app.data) if (r.location==ord[i] && r.pin_name!="NC")
+                icofs << "    " << r.inst_name << " \\\n";
+            icofs << "}\n\n";
+        }
+        icofs.close();
     }
     MiniPDF pdf;
     if (apr) pdf.generate(base + "_apr.pdf", "APR PIN DIAGRAM", prj, app.header["PACKAGE"], app.header["VERSION"], app.data, 0);

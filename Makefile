@@ -52,7 +52,7 @@ test_all: test_py test_pl test_cpp
 clean:
 	@echo "Cleaning up generated files and binaries..."
 	@rm -f $(CPP_BIN)
-	@rm -f examples/*.new examples/*_stagger.rpt examples/*_chip.const
+	@rm -f examples/*.new examples/*_stagger.rpt examples/*_chip*.const
 	@rm -f examples/*_apr.pdf examples/*_pkg.pdf examples/*_combined.pdf
 	@echo "Clean completed."
 

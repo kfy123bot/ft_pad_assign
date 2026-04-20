@@ -143,13 +143,28 @@ if ($check) {
     foreach (@data) { printf $nfh "%-8s %-12s %-20s %-12s %-4s %-4s\n", $_->{PIN_NUM}, $_->{DIE_PAD_NUM}, $_->{PIN_NAME}, $_->{IO_CELL_NAME}, $_->{LOCATION}, $_->{DIRECTION}; }
     
     $logger->info("Generating Innovus IO Constraint...");
-    open my $cfh, '>', "${base}_chip.const";
-    print $cfh "# Innovus IO Assignment File\nVersion: 2\n\n";
+    open my $cfh, '>', "${base}_chip.inn.const";
+    print $cfh "( globals\n    version = 3\n    io_order = default\n)\n( iopad\n";
     my %sm = (L=>'left', B=>'bottom', R=>'right', T=>'top');
     foreach my $c (qw(L B R T)) {
-        print $cfh "$sm{$c}:\n";
-        foreach my $r (@data) { if ($r->{LOCATION} eq $c && $r->{PIN_NAME} ne 'NC') { print $cfh "    (inst name=\"$r->{INST_NAME}\" offset=0 orientation=R0 place_status=fixed spacing=0)\n"; } }
-        print $cfh "\n";
+        my @insts = map { $_->{INST_NAME} } grep { $_->{LOCATION} eq $c && $_->{PIN_NAME} ne 'NC' } @data;
+        next unless @insts;
+        print $cfh "    ( $sm{$c}\n";
+        print $cfh "        ( locals ring_number = 1 )\n";
+        foreach (@insts) { print $cfh "        ( inst name=\"$_\" offset=0 orientation=R0 place_status=fixed spacing=0 )\n"; }
+        print $cfh "    )\n";
+    }
+    print $cfh ")\n";
+
+    $logger->info("Generating ICC2 IO Constraint...");
+    open my $icfh, '>', "${base}_chip.icc2.const";
+    print $icfh "# ICC2 IO Assignment File (Tcl commands)\n\n";
+    foreach my $c (qw(L B R T)) {
+        my @insts = map { $_->{INST_NAME} } grep { $_->{LOCATION} eq $c && $_->{PIN_NAME} ne 'NC' } @data;
+        next unless @insts;
+        print $icfh "set_io_pad_constraints -side $sm{$c} -pad_names {\\\n";
+        foreach (@insts) { print $icfh "    $_ \\\n"; }
+        print $icfh "}\n\n";
     }
 }
 my $pdf = MiniPDF->new();
