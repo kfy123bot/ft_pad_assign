@@ -1,74 +1,417 @@
 #!/usr/bin/env python3
 """
-FPAD_ASSIGN Python Implementation
+FPAD_ASSIGN - Standalone Version
 A tool for IC I/O assignment, visualization, and validation.
+Usage: python3 fpad_assign.py -list <pin_list> -v <verilog_files> [options]
 """
 
 import argparse
 import os
 import sys
+import re
 
-# Add lib to path
-repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.append(os.path.join(repo_root, "lib"))
+try:
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import landscape, A4
+    from reportlab.lib import colors
+    HAS_REPORTLAB = True
+except ImportError:
+    HAS_REPORTLAB = False
 
-from fpad_py.logger import Logger
-from fpad_py.parser import Parser
-from fpad_py.checker import Checker
-from fpad_py.writer import Writer
-from fpad_py.pdf_gen import PDFGen
+# --- Logger Class ---
+class Logger:
+    def info(self, msg): print(f"[INFO ] {msg}")
+    def warn(self, msg): print(f"[WARN ] {msg}")
+    def error(self, msg): print(f"[ERROR] {msg}")
+    def fatal(self, msg):
+        print(f"[FATAL] {msg}")
+        sys.exit(1)
 
+# --- Parser Class ---
+class Parser:
+    def __init__(self, logger, list_file, v_files=None):
+        self.logger = logger
+        self.list_file = list_file
+        self.v_files = v_files if v_files else []
+        self.header = {}
+        self.data = []
+        self.v_ports = {}
+        self.v_insts = {}
+        self.v_net_to_inst = {}
+        self.v_raw_insts = {}
+
+    def parse_list(self):
+        self.logger.info(f"Parsing Pin List: {self.list_file}")
+        if not os.path.exists(self.list_file):
+            self.logger.fatal(f"Cannot open {self.list_file}")
+        
+        try:
+            with open(self.list_file, 'r') as f:
+                in_table = False
+                for line in f:
+                    line = line.strip()
+                    if not line or re.match(r'^-+$', line): continue
+                    
+                    # Header
+                    match = re.search(r'^(PRODUCTION NO\.|PKG_TOP_LEFT_PIN|PACKAGE|VERSION)\s*:\s*(.*)', line, re.I)
+                    if match:
+                        self.header[match.group(1).upper()] = match.group(2)
+                        continue
+                    
+                    # Table Start
+                    if line.startswith('PIN_NUM') and 'DIE_PAD_NUM' in line:
+                        in_table = True
+                        continue
+                    
+                    if in_table:
+                        cols = line.split()
+                        if len(cols) >= 5:
+                            row = {
+                                'PIN_NUM':      cols[0],
+                                'DIE_PAD_NUM':  cols[1],
+                                'PIN_NAME':     cols[2],
+                                'IO_CELL_NAME': cols[3],
+                                'LOCATION':     cols[4],
+                                'DIRECTION':    cols[5] if len(cols) > 5 else '-',
+                                'LOAD':         cols[6] if len(cols) > 6 else '-',
+                                'SLEW':         cols[7] if len(cols) > 7 else '-',
+                                'SSO':          cols[8] if len(cols) > 8 else '-',
+                                'INST_NAME':    '-'
+                            }
+                            self.data.append(row)
+        except Exception as e:
+            self.logger.fatal(f"Error parsing list: {e}")
+
+    def parse_verilog(self):
+        for v_file in self.v_files:
+            if not os.path.exists(v_file):
+                self.logger.warn(f"Verilog file not found: {v_file}")
+                continue
+            self.logger.info(f"Parsing Verilog: {v_file}")
+            try:
+                with open(v_file, 'r') as f:
+                    content = f.read()
+                # Ports
+                pm = re.finditer(r'(input|output|inout)\s+(?:\[.*?\]\s+)?(.*?);', content, re.S)
+                for m in pm:
+                    direction = m.group(1)[0].upper()
+                    for p in [x.strip() for x in m.group(2).split(',')]:
+                        self.v_ports[p] = direction
+                # Instances
+                im = re.finditer(r'(\w+)\s+(\w+)\s*\((.*?)\);', content, re.S)
+                for m in im:
+                    cell, inst, body = m.groups()
+                    self.v_raw_insts[inst] = cell
+                    pad_m = re.search(r'\.PAD\s*\(\s*(.*?)\s*\)', body, re.S)
+                    if pad_m:
+                        net = pad_m.group(1).strip()
+                        self.v_insts[net] = cell
+                        self.v_net_to_inst[net] = inst
+            except Exception as e:
+                self.logger.warn(f"Error parsing Verilog {v_file}: {e}")
+
+    def bridge_data(self):
+        self.logger.info("Bridging data and extracting Instance Names...")
+        for row in self.data:
+            pn = row['PIN_NAME']
+            if pn == 'NC': continue
+            sn = pn
+            p_mode = False
+            if row['DIRECTION'] in ('P', 'G') or '%' in pn or 'POWERCUT' in pn.upper():
+                p_mode = True
+                if '%' in pn: sn = pn.split('%')[-1]
+            if p_mode:
+                if row['IO_CELL_NAME'] == '-': row['IO_CELL_NAME'] = self.v_raw_insts.get(sn, 'NOT_FOUND')
+                row['INST_NAME'] = sn
+            else:
+                if row['IO_CELL_NAME'] == '-': row['IO_CELL_NAME'] = self.v_insts.get(sn, 'NOT_FOUND')
+                row['INST_NAME'] = self.v_net_to_inst.get(sn, sn)
+                if row['DIRECTION'] == '-': row['DIRECTION'] = self.v_ports.get(sn, 'UNKNOWN')
+
+# --- PDF Generator Class ---
+class PDFGen:
+    def __init__(self, logger, parser):
+        self.logger = logger
+        self.parser = parser
+
+    def generate_combined_pdf(self, filename):
+        if not HAS_REPORTLAB:
+            self.logger.error("ReportLab is not installed.")
+            return
+        self.logger.info("Generating Combined (PKG+APR) Diagram with Bonding Wires...")
+        c = canvas.Canvas(filename, pagesize=landscape(A4))
+        width, height = landscape(A4)
+        cx, cy = width / 2, 240
+        self._draw_header(c, "COMBINED BONDING DIAGRAM", width, height)
+
+        pkg_str = self.parser.header.get('PACKAGE', '64 16 16 16 16')
+        parts = pkg_str.split()
+        l_cnt, b_cnt, r_cnt, t_cnt = map(int, parts[1:5]) if len(parts) >= 5 else (16, 16, 16, 16)
+
+        pkg_data_by_side = {'L': [], 'B': [], 'R': [], 'T': []}
+        apr_data_by_side = {'L': [], 'B': [], 'R': [], 'T': []}
+        seen_pnums = set()
+        for row in self.parser.data:
+            loc = row['LOCATION'].upper()
+            if loc not in pkg_data_by_side: continue
+            
+            # PKG side: Skip NC AND POWERCUT
+            pnum = row['PIN_NUM']
+            pname = row['PIN_NAME'].upper()
+            if pnum not in ('0', '-', 'NC') and 'POWERCUT' not in pname and pnum not in seen_pnums:
+                pkg_data_by_side[loc].append(row)
+                seen_pnums.add(pnum)
+            
+            # APR side: Skip only NC
+            if pname != 'NC':
+                apr_data_by_side[loc].append(row)
+
+        edge_pkg, edge_apr = 350, 200
+        c.setLineWidth(2)
+        c.rect(cx - edge_pkg/2, cy - edge_pkg/2, edge_pkg, edge_pkg)
+        c.setDash(4, 2); c.rect(cx - edge_apr/2, cy - edge_apr/2, edge_apr, edge_apr); c.setDash()
+
+        pkg_coords, apr_coords = {}, {}
+        for side in ('L', 'B', 'R', 'T'):
+            p_coords = self._draw_side_boxes(c, side, pkg_data_by_side[side], cx, cy, edge_pkg, getattr(self, f"_{side}_pos")(cx, cy, edge_pkg), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'PKG', label_inside=False)
+            pkg_coords.update(p_coords)
+            a_coords = self._draw_side_boxes(c, side, apr_data_by_side[side], cx, cy, edge_apr, getattr(self, f"_{side}_pos")(cx, cy, edge_apr), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'APR', label_inside=True)
+            apr_coords.update(a_coords)
+
+        c.setLineWidth(0.3)
+        for row in self.parser.data:
+            if row['PIN_NAME'].upper() == 'NC': continue
+            p_pt, a_pt = pkg_coords.get(row['PIN_NUM']), apr_coords.get(row['DIE_PAD_NUM'])
+            if p_pt and a_pt:
+                dir_color = colors.grey
+                if row['DIRECTION'] == 'P': dir_color = colors.red
+                elif row['DIRECTION'] == 'G': dir_color = colors.blue
+                c.setStrokeColor(dir_color); c.line(p_pt[0], p_pt[1], a_pt[0], a_pt[1])
+
+        self._draw_center_info(c, cx, cy, edge_apr, l_cnt, b_cnt, r_cnt, t_cnt, apr_data_by_side)
+        c.save()
+
+    def generate_apr_pdf(self, filename):
+        if not HAS_REPORTLAB: return
+        self.logger.info(f"Generating APR Diagram: {filename}")
+        c = canvas.Canvas(filename, pagesize=landscape(A4)); width, height = landscape(A4)
+        cx, cy = width/2, 240; self._draw_header(c, "APR PIN DIAGRAM", width, height)
+        edge = 350
+        c.setLineWidth(2); c.rect(cx - edge/2, cy - edge/2, edge, edge)
+        data_by_side = {'L': [], 'B': [], 'R': [], 'T': []}
+        for row in self.parser.data:
+            if row['PIN_NAME'].upper() == 'NC': continue
+            loc = row['LOCATION'].upper()
+            if loc in data_by_side: data_by_side[loc].append(row)
+        pkg_str = self.parser.header.get('PACKAGE', '64 16 16 16 16')
+        parts = pkg_str.split()
+        l_cnt, b_cnt, r_cnt, t_cnt = map(int, parts[1:5]) if len(parts) >= 5 else (16, 16, 16, 16)
+        self._draw_center_info(c, cx, cy, edge, l_cnt, b_cnt, r_cnt, t_cnt, data_by_side)
+        for side in ('L', 'B', 'R', 'T'):
+            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'APR', label_inside=False)
+        c.save()
+
+    def generate_pkg_pdf(self, filename):
+        if not HAS_REPORTLAB: return
+        self.logger.info(f"Generating PKG Diagram: {filename}")
+        c = canvas.Canvas(filename, pagesize=landscape(A4)); width, height = landscape(A4)
+        cx, cy = width/2, 240; self._draw_header(c, "PACKAGE PIN DIAGRAM", width, height)
+        edge = 350
+        c.setLineWidth(2); c.rect(cx - edge/2, cy - edge/2, edge, edge)
+        pkg_data = {}; order = []
+        for row in self.parser.data:
+            pnum = row['PIN_NUM']
+            pname = row['PIN_NAME'].upper()
+            if pnum in ('0', '-', 'NC') or 'POWERCUT' in pname: continue
+            if pnum not in pkg_data: pkg_data[pnum] = row.copy(); order.append(pnum)
+        data_by_side = {'L': [], 'B': [], 'R': [], 'T': []}
+        for pnum in order:
+            loc = pkg_data[pnum]['LOCATION'].upper()
+            if loc in data_by_side: data_by_side[loc].append(pkg_data[pnum])
+        pkg_str = self.parser.header.get('PACKAGE', '64 16 16 16 16')
+        parts = pkg_str.split()
+        l_cnt, b_cnt, r_cnt, t_cnt = map(int, parts[1:5]) if len(parts) >= 5 else (16, 16, 16, 16)
+        self._draw_center_info(c, cx, cy, edge, l_cnt, b_cnt, r_cnt, t_cnt, data_by_side)
+        for side in ('L', 'B', 'R', 'T'):
+            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'PKG', label_inside=False)
+        c.save()
+
+    def _L_pos(self, cx, cy, edge): return (cx - edge/2, cy)
+    def _B_pos(self, cx, cy, edge): return (cx, cy - edge/2)
+    def _R_pos(self, cx, cy, edge): return (cx + edge/2, cy)
+    def _T_pos(self, cx, cy, edge): return (cx, cy + edge/2)
+
+    def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False):
+        bx, by = b_pos; coords = {}
+        if not pins: return coords
+        actual_cnt = len(pins); calc_total = max(actual_cnt, total); step = length / (calc_total + 1)
+        box_thickness = max(1, min(step * 0.8, 6)); font_size = max(2, min(step * 0.9, 7))
+        box_len = 15 if mode == 'APR' else 25
+        for idx, pin in enumerate(pins, 1):
+            pname = pin['PIN_NAME']; display_name = pname
+            if '%' in pname: display_name = pname.split('%')[-1] if mode == 'APR' else pname.split('%')[0]
+            px, py = 0, 0; bw, bh = 0, 0
+            if side == 'L':
+                bw, bh = box_len, box_thickness; px = bx - (0 if label_inside else bw); py = (by + length/2) - (idx * step) - (bh/2)
+                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = (bx, py + bh/2)
+            elif side == 'B':
+                bw, bh = box_thickness, box_len; px = (bx - length/2) + (idx * step) - (bw/2); py = by - (0 if label_inside else bh)
+                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = (px + bw/2, by)
+            elif side == 'R':
+                bw, bh = box_len, box_thickness; px = bx - (bw if label_inside else 0); py = (by - length/2) + (idx * step) - (bh/2)
+                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = (bx, py + bh/2)
+            elif side == 'T':
+                bw, bh = box_thickness, box_len; px = (bx + length/2) - (idx * step) - (bw/2); py = by - (bh if label_inside else 0)
+                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = (px + bw/2, by)
+            c.setLineWidth(0.5); c.setStrokeColor(colors.black); direction = pin['DIRECTION']
+            if 'POWERCUT' in pname.upper(): c.setFillColor(colors.black); c.rect(px, py, bw, bh, fill=1)
+            elif direction == 'P': c.setFillColor(colors.red); c.rect(px, py, bw, bh, fill=1)
+            elif direction == 'G': c.setFillColor(colors.blue); c.rect(px, py, bw, bh, fill=1)
+            else: c.rect(px, py, bw, bh, fill=0)
+            c.setFont("Helvetica", font_size); c.setFillColor(colors.black)
+            if side == 'L':
+                c.drawRightString(px - 4, py + (bh/2) - (font_size/2), display_name)
+            elif side == 'R':
+                c.drawString(px + bw + 4, py + (bh/2) - (font_size/2), display_name)
+            elif side == 'T':
+                c.saveState()
+                c.translate(px + bw/2, py + bh + 2)
+                c.rotate(90); c.drawString(0, -font_size/2, display_name)
+                c.restoreState()
+            elif side == 'B':
+                c.saveState()
+                c.translate(px + bw/2, py - 2)
+                c.rotate(270); c.drawString(0, -font_size/2, display_name)
+                c.restoreState()
+        return coords
+
+    def _draw_header(self, c, title, width, height):
+        c.setLineWidth(1); c.setStrokeColor(colors.black); c.rect(50, height - 85, width - 100, 65)
+        c.setFont("Helvetica-Bold", 18); c.drawCentredString(width/2, height - 45, title)
+        c.setFont("Helvetica", 10); h = self.parser.header
+        proj = h.get('PRODUCTION NO.', h.get('PRODUCTION NO', 'N/A'))
+        pkg = h.get('PACKAGE', 'N/A'); ver = h.get('VERSION', 'N/A')
+        c.drawString(60, height - 65, f"Project: {proj}"); c.drawCentredString(width/2, height - 65, f"Package: {pkg}"); c.drawRightString(width - 60, height - 65, f"Version: {ver}")
+
+    def _draw_center_info(self, c, cx, cy, edge, l, b, r, t, data):
+        f_max = max(l, b, r, t)
+        for s in ('L', 'B', 'R', 'T'): f_max = max(f_max, len(data.get(s, [])))
+        step = edge / (f_max + 1); font_size = max(2, min(step * 0.9, 7)); spacing = font_size * 1.5
+        c.setFont("Helvetica", font_size); c.setFillColor(colors.black)
+        h = self.parser.header
+        c.drawCentredString(cx, cy + spacing, f"Project: {h.get('PRODUCTION NO.', 'N/A')}")
+        c.drawCentredString(cx, cy, f"Package: {h.get('PACKAGE', 'N/A')}")
+        c.drawCentredString(cx, cy - spacing, f"Version: {h.get('VERSION', 'N/A')}")
+
+# --- Checker Class ---
+class Checker:
+    def __init__(self, logger, parser):
+        self.logger = logger
+        self.parser = parser
+
+    def check_stagger(self, filename):
+        self.logger.info("Running Stagger Density Check...")
+        try:
+            with open(filename, 'w') as f:
+                f.write("STAGGER DENSITY CHECK REPORT\n")
+                f.write("=" * 30 + "\n")
+                io_count = 0
+                max_io = 8
+                for row in self.parser.data:
+                    if row['DIRECTION'] in ('I', 'O', 'B'):
+                        io_count += 1
+                        if io_count > max_io:
+                            msg = f"[WARN] Consecutive I/O at Pin {row['PIN_NUM']} ({row['PIN_NAME']})"
+                            f.write(msg + "\n")
+                            self.logger.warn(msg)
+                    elif row['DIRECTION'] in ('P', 'G'):
+                        io_count = 0
+            self.logger.info(f"Report saved: {filename}")
+        except Exception as e:
+            self.logger.error(f"Error in checker: {e}")
+
+# --- Writer Class ---
+class Writer:
+    def __init__(self, logger, parser):
+        self.logger = logger
+        self.parser = parser
+
+    def generate_completed_list(self, filename):
+        self.logger.info(f"Generating completed list: {filename}")
+        try:
+            with open(filename, 'w') as f:
+                for k, v in sorted(self.parser.header.items()):
+                    f.write(f"{k:<20} : {v}\n")
+                f.write("\n")
+                f.write(f"{'PIN_NUM':<8} {'DIE_PAD_NUM':<12} {'PIN_NAME':<20} {'IO_CELL_NAME':<12} {'LOCATION':<8} {'DIRECTION':<10} {'LOAD':<6} {'SLEW':<6} {'SSO':<6}\n")
+                f.write("-" * 100 + "\n")
+                for r in self.parser.data:
+                    f.write(f"{r['PIN_NUM']:<8} {r['DIE_PAD_NUM']:<12} {r['PIN_NAME']:<20} {r['IO_CELL_NAME']:<12} {r['LOCATION']:<8} {r['DIRECTION']:<10} {r['LOAD']:<6} {r['SLEW']:<6} {r['SSO']:<6}\n")
+        except Exception as e:
+            self.logger.error(f"Error in writer: {e}")
+
+    def generate_innovus_io(self, filename):
+        self.logger.info(f"Generating Innovus IO Constraint: {filename}")
+        try:
+            sides = {'L': [], 'B': [], 'R': [], 'T': []}
+            for row in self.parser.data:
+                if row['PIN_NAME'].upper() == 'NC': continue
+                loc = row['LOCATION'].upper()
+                if loc in sides: sides[loc].append(row['INST_NAME'])
+            with open(filename, 'w') as f:
+                f.write("# Innovus IO Assignment File\nVersion: 2\n\n")
+                s_map = {'L': 'left', 'B': 'bottom', 'R': 'right', 'T': 'top'}
+                for code in ['L', 'B', 'R', 'T']:
+                    f.write(f"{s_map[code]}:\n")
+                    for inst in sides[code]:
+                        f.write(f"    (inst name=\"{inst}\" offset=0 orientation=R0 place_status=fixed spacing=0)\n")
+                    f.write("\n")
+        except Exception as e:
+            self.logger.error(f"Error in writer: {e}")
+
+# --- Main Logic ---
 def main():
-    parser = argparse.ArgumentParser(description="FPAD_ASSIGN Python Core.")
-    parser.add_argument("-list", dest="list_file", required=True, help="Pin sequence list file (9-column).")
-    parser.add_argument("-v", dest="verilog_files", nargs="*", help="Verilog netlist files.")
-    parser.add_argument("-apr", action="store_true", help="Generate APR diagram (PDF).")
-    parser.add_argument("-pkg", action="store_true", help="Generate PKG diagram (PDF).")
-    parser.add_argument("-c", dest="check", action="store_true", help="Generate completed pin list and Innovus IO constraint.")
-    parser.add_argument("-stagger", action="store_true", help="Run stagger density check.")
-    parser.add_argument("-all", action="store_true", help="Run all functions.")
-    args = parser.parse_args()
+    p = argparse.ArgumentParser(description="FPAD_ASSIGN Standalone Tool")
+    p.add_argument("-list", required=True, help="Pin list file")
+    p.add_argument("-v", nargs='*', help="Verilog files")
+    p.add_argument("-apr", action="store_true", help="APR Diagram")
+    p.add_argument("-pkg", action="store_true", help="PKG Diagram")
+    p.add_argument("-combined", action="store_true", help="Combined Diagram with wires")
+    p.add_argument("-c", action="store_true", help="Generate .new and .const files")
+    p.add_argument("-stagger", action="store_true", help="Stagger check")
+    p.add_argument("-all", action="store_true", help="All functions")
+    args = p.parse_args()
+
+    if args.all: args.apr = args.pkg = args.combined = args.c = args.stagger = True
 
     logger = Logger()
-    
-    if args.all:
-        args.apr = args.pkg = args.check = args.stagger = True
+    logger.info("Starting FPAD_ASSIGN Standalone...")
 
-    logger.info("Starting FPAD_ASSIGN (Python Implementation)...")
-
-    # 1. Parsing Phase
-    fpad_parser = Parser(logger, args.list_file, args.verilog_files)
-    fpad_parser.parse_list()
-    
-    if args.verilog_files:
-        fpad_parser.parse_verilog()
-        fpad_parser.bridge_data()
+    parser = Parser(logger, args.list, args.v)
+    parser.parse_list()
+    if args.v:
+        parser.parse_verilog()
+        parser.bridge_data()
     else:
-        logger.warn("No Verilog files provided, skipping Verilog parsing and bridging.")
+        logger.warn("No Verilog files, skipping bridging.")
 
-    # 2. Execution Phase
-    base_name = os.path.splitext(args.list_file)[0]
+    base = os.path.splitext(args.list)[0]
 
-    # Checker
     if args.stagger:
-        checker = Checker(logger, fpad_parser)
-        checker.check_stagger(f"{base_name}_stagger.rpt")
+        Checker(logger, parser).check_stagger(f"{base}_stagger.rpt")
+    
+    if args.c:
+        w = Writer(logger, parser)
+        w.generate_completed_list(f"{base}.new")
+        w.generate_innovus_io(f"{base}_chip.const")
 
-    # Writer
-    if args.check:
-        writer = Writer(logger, fpad_parser)
-        writer.generate_completed_list(f"{base_name}.new")
-        writer.generate_innovus_io(f"{base_name}_chip.const")
+    if args.apr or args.pkg or args.combined:
+        pg = PDFGen(logger, parser)
+        if args.apr: pg.generate_apr_pdf(f"{base}_apr.pdf")
+        if args.pkg: pg.generate_pkg_pdf(f"{base}_pkg.pdf")
+        if args.combined: pg.generate_combined_pdf(f"{base}_combined.pdf")
 
-    # PDF Generation
-    if args.apr or args.pkg:
-        pdf_gen = PDFGen(logger, fpad_parser)
-        if args.apr:
-            pdf_gen.generate_apr_pdf(f"{base_name}_apr.pdf")
-        if args.pkg:
-            pdf_gen.generate_pkg_pdf(f"{base_name}_pkg.pdf")
-
-    logger.info("FPAD_ASSIGN process completed successfully.")
+    logger.info("Execution successful.")
 
 if __name__ == "__main__":
     main()
