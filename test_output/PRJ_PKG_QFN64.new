@@ -1,9 +1,9 @@
 PACKAGE              : 64QFN 16 16 16 16
 PKG_TOP_LEFT_PIN     : 1
-PRODUCTION NO.       : PRJ_QFN64
+PRODUCTION NO.       : PRJ_PKG_QFN64
 VERSION              : V1.0_20240418
 
-PIN_NUM  DIE_PAD_NUM  PIN_NAME             IO_CELL_NAME LOCATION   DIE_PAD_NUM_LOC    DIRECTION  LOAD   SLEW   SSO
+PKG_NUM  DIE_NUM      PIN_NAME             IO_CELL_NAME PKG_LOC    DIE_LOC            DIRECTION  LOAD   SLEW   SSO
 ------------------------------------------------------------------------------------------------------------------------
 1        0            NC                   -            L          T                  -          -      -      -
 2        66           MCK                  PDXOE3DG     L          T                  I          -      2.0    -
