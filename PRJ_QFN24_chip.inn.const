@@ -28,7 +28,7 @@
         ( inst name="u_csb" offset=0 orientation=R0 place_status=fixed spacing=0 )
         ( inst name="POWERCUT01" offset=0 orientation=R0 place_status=fixed spacing=0 )
         ( inst name="u_d7" offset=0 orientation=R0 place_status=fixed spacing=0 )
-        ( inst name="u_d7" offset=0 orientation=R0 place_status=fixed spacing=0 )
+        ( inst name="u_d6" offset=0 orientation=R0 place_status=fixed spacing=0 )
     )
     ( top
         ( locals ring_number = 1 )

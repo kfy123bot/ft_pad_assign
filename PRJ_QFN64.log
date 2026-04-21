@@ -1,0 +1,29 @@
+--- FPAD_ASSIGN Execution Log (2026-04-21 18:21:49.338827) ---
+Project: PRJ_QFN64
+[INFO ] Log file initialized: ./PRJ_QFN64.log
+[INFO ] Reading Pin List: examples/qfn64.pin_list
+[INFO ] Loaded 69 entries from pin list.
+[INFO ] Performing Sanity Check on Pin List...
+[INFO ] Side L check passed: 16 pins.
+[INFO ] Side B check passed: 16 pins.
+[INFO ] Side R check passed: 16 pins.
+[INFO ] Side T check passed: 16 pins.
+[INFO ] Pin list sanity check complete.
+[INFO ] Reading Verilog: examples/example_top.v
+[INFO ] Reading Verilog: examples/qfn64_top.v
+[INFO ] Bridging data and re-indexing DIE_PAD_NUM...
+[INFO ] Running Stagger Density Check...
+[WARN ] [WARN] Consecutive I/O at Pin 27 (EXTRA_G1)
+[WARN ] [WARN] Consecutive I/O at Pin 28 (SIG_B1)
+[WARN ] [WARN] Consecutive I/O at Pin 29 (SIG_B2)
+[WARN ] [WARN] Consecutive I/O at Pin 30 (SIG_B3)
+[WARN ] [WARN] Consecutive I/O at Pin 31 (SIG_B4)
+[WARN ] [WARN] Consecutive I/O at Pin 32 (NC)
+[INFO ] Report saved: ./PRJ_QFN64_stagger.rpt
+[INFO ] Generating completed list: ./PRJ_QFN64.new
+[INFO ] Generating Innovus IO Constraint: ./PRJ_QFN64_chip.inn.const
+[INFO ] Generating ICC2 IO Constraint: ./PRJ_QFN64_chip.icc2.const
+[INFO ] Generating APR Diagram: ./PRJ_QFN64_apr.pdf
+[INFO ] Generating PKG Diagram: ./PRJ_QFN64_pkg.pdf
+[INFO ] Generating Combined (PKG+APR) Diagram with Bonding Wires...
+[INFO ] Execution successful.

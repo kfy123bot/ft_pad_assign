@@ -1,0 +1,8 @@
+STAGGER DENSITY CHECK REPORT
+==============================
+[WARN] Consecutive I/O at Pin 27 (EXTRA_G1)
+[WARN] Consecutive I/O at Pin 28 (SIG_B1)
+[WARN] Consecutive I/O at Pin 29 (SIG_B2)
+[WARN] Consecutive I/O at Pin 30 (SIG_B3)
+[WARN] Consecutive I/O at Pin 31 (SIG_B4)
+[WARN] Consecutive I/O at Pin 32 (NC)

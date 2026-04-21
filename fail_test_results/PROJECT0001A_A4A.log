@@ -1,0 +1,17 @@
+--- FPAD_ASSIGN Execution Log (2026-04-21 13:56:45.992501) ---
+Project: PROJECT0001A_A4A
+[INFO ] Log file initialized: fail_test_results/PROJECT0001A_A4A.log
+[INFO ] Reading Pin List: examples/fail_test.pin_list
+[INFO ] Loaded 27 entries from pin list.
+[INFO ] Performing Sanity Check on Pin List...
+[ERROR] Sanity Check Failed for Side L:
+[ERROR]   - Expected from PACKAGE definition: 10
+[ERROR]   - Actual unique PIN_NUMs in list:   6
+[ERROR]   - Missing or extra pins on Side L detected!
+[INFO ] Side B check passed: 6 pins.
+[INFO ] Side R check passed: 5 pins.
+[INFO ] Side T check passed: 7 pins.
+[ERROR] TOTAL PIN COUNT MISMATCH: PACKAGE expects 28, List has 24 unique pins.
+[INFO ] Pin list sanity check complete.
+[WARN ] No Verilog files, skipping bridging.
+[INFO ] Execution successful.

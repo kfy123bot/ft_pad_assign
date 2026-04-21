@@ -24,7 +24,7 @@ set_io_pad_constraints -side right -pad_names {\
     u_csb \
     POWERCUT01 \
     u_d7 \
-    u_d7 \
+    u_d6 \
 }
 
 set_io_pad_constraints -side top -pad_names {\

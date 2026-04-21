@@ -18,13 +18,39 @@ try:
 except ImportError:
     HAS_REPORTLAB = False
 
+import datetime
+
 # --- Logger Class ---
 class Logger:
-    def info(self, msg): print(f"[INFO ] {msg}")
-    def warn(self, msg): print(f"[WARN ] {msg}")
-    def error(self, msg): print(f"[ERROR] {msg}")
+    def __init__(self, log_fn=None):
+        self.log_fn = log_fn
+        if self.log_fn:
+            with open(self.log_fn, 'w') as f:
+                f.write(f"--- FPAD_ASSIGN Execution Log ({datetime.datetime.now()}) ---\n")
+
+    def info(self, msg):
+        out = f"[INFO ] {msg}"
+        print(out)
+        if self.log_fn:
+            with open(self.log_fn, 'a') as f: f.write(out + "\n")
+
+    def warn(self, msg):
+        out = f"[WARN ] {msg}"
+        print(out)
+        if self.log_fn:
+            with open(self.log_fn, 'a') as f: f.write(out + "\n")
+
+    def error(self, msg):
+        out = f"[ERROR] {msg}"
+        print(out)
+        if self.log_fn:
+            with open(self.log_fn, 'a') as f: f.write(out + "\n")
+
     def fatal(self, msg):
-        print(f"[FATAL] {msg}")
+        out = f"[FATAL] {msg}"
+        print(out)
+        if self.log_fn:
+            with open(self.log_fn, 'a') as f: f.write(out + "\n")
         sys.exit(1)
 
 # --- Parser Class ---
@@ -41,9 +67,9 @@ class Parser:
         self.v_raw_insts = {}
 
     def parse_list(self):
-        self.logger.info(f"Parsing Pin List: {self.list_file}")
+        self.logger.info(f"Reading Pin List: {self.list_file}")
         if not os.path.exists(self.list_file):
-            self.logger.fatal(f"Cannot open {self.list_file}")
+            self.logger.fatal(f"File not found: {self.list_file}")
         
         try:
             with open(self.list_file, 'r') as f:
@@ -51,18 +77,13 @@ class Parser:
                 for line in f:
                     line = line.strip()
                     if not line or re.match(r'^-+$', line): continue
-                    
-                    # Header
                     match = re.search(r'^(PRODUCTION NO\.|PKG_TOP_LEFT_PIN|PACKAGE|VERSION)\s*:\s*(.*)', line, re.I)
                     if match:
                         self.header[match.group(1).upper()] = match.group(2)
                         continue
-                    
-                    # Table Start
                     if line.startswith('PIN_NUM') and 'DIE_PAD_NUM' in line:
                         in_table = True
                         continue
-                    
                     if in_table:
                         cols = line.split()
                         if len(cols) >= 5:
@@ -79,15 +100,65 @@ class Parser:
                                 'INST_NAME':    '-'
                             }
                             self.data.append(row)
+            self.logger.info(f"Loaded {len(self.data)} entries from pin list.")
+            self._sanity_check_list()
         except Exception as e:
             self.logger.fatal(f"Error parsing list: {e}")
+
+    def _sanity_check_list(self):
+        self.logger.info("Performing Sanity Check on Pin List...")
+        # 1. Package Side Count Verification
+        pkg_str = self.header.get('PACKAGE', '')
+        if not pkg_str:
+            self.logger.warn("PACKAGE definition missing in header.")
+            return
+
+        parts = pkg_str.split()
+        if len(parts) < 5:
+            self.logger.error(f"Invalid PACKAGE format: '{pkg_str}'. Expected 'TYPE L B R T'.")
+            return
+
+        expected = {'L': int(parts[1]), 'B': int(parts[2]), 'R': int(parts[3]), 'T': int(parts[4])}
+        actual_pnums = {'L': set(), 'B': set(), 'R': set(), 'T': set()}
+
+        for row in self.data:
+            loc = row['LOCATION'].upper()
+            pnum = row['PIN_NUM']
+            pname = row['PIN_NAME'].upper()
+            
+            # Filter out special marks
+            if pnum in ('0', '-', 'NC') or 'POWERCUT' in pname:
+                continue
+            
+            if loc in actual_pnums:
+                actual_pnums[loc].add(pnum)
+
+        for side in ('L', 'B', 'R', 'T'):
+            act_cnt = len(actual_pnums[side])
+            exp_cnt = expected[side]
+            if act_cnt != exp_cnt:
+                self.logger.error(f"Sanity Check Failed for Side {side}:")
+                self.logger.error(f"  - Expected from PACKAGE definition: {exp_cnt}")
+                self.logger.error(f"  - Actual unique PIN_NUMs in list:   {act_cnt}")
+                self.logger.error(f"  - Missing or extra pins on Side {side} detected!")
+            else:
+                self.logger.info(f"Side {side} check passed: {act_cnt} pins.")
+        
+        # If any side failed, we should probably let the user know this is a critical issue
+        total_exp = sum(expected.values())
+        total_act = sum(len(s) for s in actual_pnums.values())
+        if total_exp != total_act:
+             self.logger.error(f"TOTAL PIN COUNT MISMATCH: PACKAGE expects {total_exp}, List has {total_act} unique pins.")
+        
+        self.logger.info("Pin list sanity check complete.")
 
     def parse_verilog(self):
         for v_file in self.v_files:
             if not os.path.exists(v_file):
                 self.logger.warn(f"Verilog file not found: {v_file}")
                 continue
-            self.logger.info(f"Parsing Verilog: {v_file}")
+            self.logger.info(f"Reading Verilog: {v_file}")
+            # ... rest of parse_verilog
             try:
                 with open(v_file, 'r') as f:
                     content = f.read()
@@ -444,37 +515,70 @@ def main():
     p.add_argument("-c", action="store_true", help="Generate .new and .const files")
     p.add_argument("-stagger", action="store_true", help="Stagger check")
     p.add_argument("-all", action="store_true", help="All functions")
+    p.add_argument("-o", "--outdir", help="Output folder")
     args = p.parse_args()
 
     if args.all: args.apr = args.pkg = args.combined = args.c = args.stagger = True
 
-    logger = Logger()
-    logger.info("Starting FPAD_ASSIGN Standalone...")
+    # 1. Initial Logger
+    logger = Logger() # Defaults to stdout only if no filename
+    logger.info("Starting FPAD_ASSIGN Standalone Tool...")
 
+    # 2. Pre-scan the pin list for PRODUCTION NO. to set up output early
+    proj_no = "fpad_out"
+    if os.path.exists(args.list):
+        try:
+            with open(args.list, 'r') as f:
+                for line in f:
+                    match = re.search(r'PRODUCTION NO\.\s*:\s*(.*)', line, re.I)
+                    if match:
+                        proj_no = match.group(1).strip()
+                        break
+        except: pass
+    
+    proj_no = re.sub(r'[^\w\-]', '_', proj_no)
+    
+    out_dir = "."
+    if args.outdir:
+        out_dir = args.outdir
+        if not os.path.exists(out_dir):
+            os.makedirs(out_dir)
+            # We can't log this to the file yet, but it's okay
+
+    # 3. Setup final log file location
+    log_path = os.path.join(out_dir, f"{proj_no}.log")
+    logger.log_fn = log_path
+    with open(log_path, 'w') as f:
+        f.write(f"--- FPAD_ASSIGN Execution Log ({datetime.datetime.now()}) ---\n")
+        f.write(f"Project: {proj_no}\n")
+    logger.info(f"Log file initialized: {log_path}")
+
+    # 4. Now run the full parsing and check
     parser = Parser(logger, args.list, args.v)
     parser.parse_list()
+
     if args.v:
         parser.parse_verilog()
         parser.bridge_data()
     else:
         logger.warn("No Verilog files, skipping bridging.")
 
-    base = os.path.splitext(args.list)[0]
+    prefix = os.path.join(out_dir, proj_no)
 
     if args.stagger:
-        Checker(logger, parser).check_stagger(f"{base}_stagger.rpt")
+        Checker(logger, parser).check_stagger(f"{prefix}_stagger.rpt")
     
     if args.c:
         w = Writer(logger, parser)
-        w.generate_completed_list(f"{base}.new")
-        w.generate_innovus_io(f"{base}_chip.inn.const")
-        w.generate_icc2_io(f"{base}_chip.icc2.const")
+        w.generate_completed_list(f"{prefix}.new")
+        w.generate_innovus_io(f"{prefix}_chip.inn.const")
+        w.generate_icc2_io(f"{prefix}_chip.icc2.const")
 
     if args.apr or args.pkg or args.combined:
         pg = PDFGen(logger, parser)
-        if args.apr: pg.generate_apr_pdf(f"{base}_apr.pdf")
-        if args.pkg: pg.generate_pkg_pdf(f"{base}_pkg.pdf")
-        if args.combined: pg.generate_combined_pdf(f"{base}_combined.pdf")
+        if args.apr: pg.generate_apr_pdf(f"{prefix}_apr.pdf")
+        if args.pkg: pg.generate_pkg_pdf(f"{prefix}_pkg.pdf")
+        if args.combined: pg.generate_combined_pdf(f"{prefix}_combined.pdf")
 
     logger.info("Execution successful.")
 
