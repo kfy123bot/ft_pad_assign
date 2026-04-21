@@ -3,74 +3,74 @@ PKG_TOP_LEFT_PIN     : 1
 PRODUCTION NO.       : PRJ_QFN64
 VERSION              : V1.0_20240418
 
-PIN_NUM  DIE_PAD_NUM  PIN_NAME             IO_CELL_NAME LOCATION DIRECTION  LOAD   SLEW   SSO   
-----------------------------------------------------------------------------------------------------
-1        0            NC                   -            L        T          -      -      -     
-2        1            MCK                  PDXOE3DG     L        T          I      -      2.0   
-3        2            MSI                  PDUDGZ       L        T          I      -      2.0   
-4        3            MSO                  PDO08CDG     L        L          O      50.0   2.0   
-5        4            VDD%C%VDDC1          PVDD1DG      L        L          P      -      -     
-6        5            MBS                  PDUDGZ       L        L          I      -      2.0   
-7        6            MBC                  PDUDGZ       L        L          I      -      2.0   
-8        7            VDDIO%IO%VDDIO1      PVDD2DG      L        L          P      -      -     
-8        8            VDDIO%IO%VDDIO2      PVDD2DG      L        L          P      -      -     
-9        9            MBR                  PDUDGZ       L        L          -      -      2.0   
-10       10           VSSIO%IO%VSSIO1      PVSS2DG      L        L          G      -      -     
-11       11           MRD                  PDO08CDG     L        L          O      50.0   2.0   
-12       12           MBO                  PDO08CDG     L        L          O      50.0   2.0   
-13       13           VSSIO%IO%VSSIO2      PVSS2DG      L        L          G      -      -     
-14       14           WEB                  PDUDGZ       L        L          I      -      2.0   
-15       15           CSB                  PDUDGZ       L        L          I      -      2.0   
-0        16           POWERCUT01           PRDIODE      L        L          -      -      -     
-16       17           D7                   PDUDGZ       L        L          I      -      2.0   
-17       18           D6                   PDUDGZ       B        L          I      -      2.0   
-18       19           D5                   PDUDGZ       B        L          I      -      2.0   
-19       20           D4                   PDUDGZ       B        L          I      -      2.0   
-20       21           VDDIO%IO%VDDIO3      PVDD2DG      B        B          P      -      -     
-21       22           D3                   PDUDGZ       B        B          I      -      2.0   
-22       23           D2                   PDUDGZ       B        B          I      -      2.0   
-23       24           VSS%C%VSSC1          PVSS1DG      B        B          G      -      -     
-23       25           VSSIO%IO%VSSIO3      PVSS2DG      B        B          G      -      -     
-24       26           D1                   PDUDGZ       B        B          I      -      2.0   
-25       27           D0                   PDUDGZ       B        B          I      -      2.0   
-26       28           EXTRA_P1             NOT_FOUND    B        B          P      -      -     
-27       29           EXTRA_G1             NOT_FOUND    B        B          G      -      -     
-28       30           SIG_B1               NOT_FOUND    B        B          B      -      -     
-29       31           SIG_B2               NOT_FOUND    B        B          B      -      -     
-30       32           SIG_B3               NOT_FOUND    B        B          B      -      -     
-31       33           SIG_B4               NOT_FOUND    B        B          B      -      -     
-32       0            NC                   -            B        B          -      -      -     
-33       34           R_SIG1               NOT_FOUND    R        R          I      -      -     
-34       35           R_SIG2               NOT_FOUND    R        R          I      -      -     
-35       36           R_SIG3               NOT_FOUND    R        R          O      -      -     
-36       37           R_SIG4               NOT_FOUND    R        R          O      -      -     
-37       38           VDD%IO%VDDIO4        PVDD2DG      R        R          P      -      -     
-38       39           VSS%C%VSSC2          PVSS1DG      R        R          G      -      -     
-39       40           R_SIG5               NOT_FOUND    R        R          B      -      -     
-40       41           R_SIG6               NOT_FOUND    R        R          B      -      -     
-41       42           R_SIG7               NOT_FOUND    R        R          B      -      -     
-42       43           R_SIG8               NOT_FOUND    R        R          B      -      -     
-43       44           R_SIG9               NOT_FOUND    R        R          -      -      -     
-44       45           R_SIG10              NOT_FOUND    R        R          -      -      -     
-45       46           VSSIO%IO%VSSIO4      PVSS2DG      R        R          G      -      -     
-0        47           POWERCUT02           PRDIODE      R        R          -      -      -     
-46       48           R_ABCD               NOT_FOUND    R        R          -      -      -     
-47       49           R_SIG11              NOT_FOUND    R        R          -      -      -     
-48       50           R_SIG12              NOT_FOUND    R        R          -      -      -     
-49       51           T_SIG1               NOT_FOUND    T        T          -      -      -     
-50       52           T_SIG2               NOT_FOUND    T        T          -      -      -     
-51       53           T_SIG3               NOT_FOUND    T        T          -      -      -     
-52       54           T_SIG4               NOT_FOUND    T        T          -      -      -     
-53       55           VDD%C%VDDC2          PVDD1DG      T        T          P      -      -     
-54       56           VSS%IO%VSSIO5        PVSS2DG      T        T          G      -      -     
-55       57           T_SIG5               NOT_FOUND    T        T          -      -      -     
-56       58           T_SIG6               NOT_FOUND    T        T          -      -      -     
-57       59           T_SIG7               NOT_FOUND    T        T          -      -      -     
-58       60           T_SIG8               NOT_FOUND    T        T          -      -      -     
-59       61           T_SIG9               NOT_FOUND    T        T          -      -      -     
-60       62           T_SIG10              NOT_FOUND    T        T          -      -      -     
-61       63           VSS%C%VSSC3          PVSS1DG      T        T          G      -      -     
-0        64           POWERCUT03           PRDIODE      T        T          -      -      -     
-62       65           T_SIG11              NOT_FOUND    T        T          -      -      -     
-63       66           T_SIG12              NOT_FOUND    T        T          -      -      -     
-64       67           T_SIG13              NOT_FOUND    T        T          -      -      -     
+PIN_NUM  DIE_PAD_NUM  PIN_NAME             IO_CELL_NAME LOCATION   DIE_PAD_NUM_LOC    DIRECTION  LOAD   SLEW   SSO   
+------------------------------------------------------------------------------------------------------------------------
+1        0            NC                   -            L          T                  -          -      -      -     
+2        1            MCK                  PDXOE3DG     L          T                  I          -      2.0    -     
+3        2            MSI                  PDUDGZ       L          T                  I          -      2.0    -     
+4        3            MSO                  PDO08CDG     L          L                  O          50.0   2.0    A     
+5        4            VDD%C%VDDC1          PVDD1DG      L          L                  P          -      -      -     
+6        5            MBS                  PDUDGZ       L          L                  I          -      2.0    -     
+7        6            MBC                  PDUDGZ       L          L                  I          -      2.0    -     
+8        7            VDDIO%IO%VDDIO1      PVDD2DG      L          L                  P          -      -      -     
+8        8            VDDIO%IO%VDDIO2      PVDD2DG      L          L                  P          -      -      -     
+9        9            MBR                  PDUDGZ       L          L                  I          -      2.0    -     
+10       10           VSSIO%IO%VSSIO1      PVSS2DG      L          L                  G          -      -      -     
+11       11           MRD                  PDO08CDG     L          L                  O          50.0   2.0    A     
+12       12           MBO                  PDO08CDG     L          L                  O          50.0   2.0    A     
+13       13           VSSIO%IO%VSSIO2      PVSS2DG      L          L                  G          -      -      -     
+14       14           WEB                  PDUDGZ       L          L                  I          -      2.0    A     
+15       15           CSB                  PDUDGZ       L          L                  I          -      2.0    A     
+0        16           POWERCUT01           PRDIODE      L          L                  -          -      -      -     
+16       17           D7                   PDUDGZ       L          L                  I          -      2.0    B     
+17       18           D6                   PDUDGZ       B          L                  I          -      2.0    B     
+18       19           D5                   PDUDGZ       B          L                  I          -      2.0    B     
+19       20           D4                   PDUDGZ       B          L                  I          -      2.0    B     
+20       21           VDDIO%IO%VDDIO3      PVDD2DG      B          B                  P          -      -      -     
+21       22           D3                   PDUDGZ       B          B                  I          -      2.0    B     
+22       23           D2                   PDUDGZ       B          B                  I          -      2.0    B     
+23       24           VSS%C%VSSC1          PVSS1DG      B          B                  G          -      -      -     
+23       25           VSSIO%IO%VSSIO3      PVSS2DG      B          B                  G          -      -      -     
+24       26           D1                   PDUDGZ       B          B                  I          -      2.0    B     
+25       27           D0                   PDUDGZ       B          B                  I          -      2.0    B     
+26       28           EXTRA_P1             NOT_FOUND    B          B                  P          -      -      -     
+27       29           EXTRA_G1             NOT_FOUND    B          B                  G          -      -      -     
+28       30           SIG_B1               NOT_FOUND    B          B                  B          -      -      -     
+29       31           SIG_B2               NOT_FOUND    B          B                  B          -      -      -     
+30       32           SIG_B3               NOT_FOUND    B          B                  B          -      -      -     
+31       33           SIG_B4               NOT_FOUND    B          B                  B          -      -      -     
+32       0            NC                   -            B          B                  -          -      -      -     
+33       34           R_SIG1               NOT_FOUND    R          R                  I          -      -      -     
+34       35           R_SIG2               NOT_FOUND    R          R                  I          -      -      -     
+35       36           R_SIG3               NOT_FOUND    R          R                  O          -      -      -     
+36       37           R_SIG4               NOT_FOUND    R          R                  O          -      -      -     
+37       38           VDD%IO%VDDIO4        PVDD2DG      R          R                  P          -      -      -     
+38       39           VSS%C%VSSC2          PVSS1DG      R          R                  G          -      -      -     
+39       40           R_SIG5               NOT_FOUND    R          R                  B          -      -      -     
+40       41           R_SIG6               NOT_FOUND    R          R                  B          -      -      -     
+41       42           R_SIG7               NOT_FOUND    R          R                  B          -      -      -     
+42       43           R_SIG8               NOT_FOUND    R          R                  B          -      -      -     
+43       44           R_SIG9               NOT_FOUND    R          R                  UNKNOWN    -      -      -     
+44       45           R_SIG10              NOT_FOUND    R          R                  UNKNOWN    -      -      -     
+45       46           VSSIO%IO%VSSIO4      PVSS2DG      R          R                  G          -      -      -     
+0        47           POWERCUT02           PRDIODE      R          R                  -          -      -      -     
+46       48           R_ABCD               NOT_FOUND    R          R                  UNKNOWN    -      -      -     
+47       49           R_SIG11              NOT_FOUND    R          R                  UNKNOWN    -      -      -     
+48       50           R_SIG12              NOT_FOUND    R          R                  UNKNOWN    -      -      -     
+49       51           T_SIG1               NOT_FOUND    T          T                  UNKNOWN    -      -      -     
+50       52           T_SIG2               NOT_FOUND    T          T                  UNKNOWN    -      -      -     
+51       53           T_SIG3               NOT_FOUND    T          T                  UNKNOWN    -      -      -     
+52       54           T_SIG4               NOT_FOUND    T          T                  UNKNOWN    -      -      -     
+53       55           VDD%C%VDDC2          PVDD1DG      T          T                  P          -      -      -     
+54       56           VSS%IO%VSSIO5        PVSS2DG      T          T                  G          -      -      -     
+55       57           T_SIG5               NOT_FOUND    T          T                  UNKNOWN    -      -      -     
+56       58           T_SIG6               NOT_FOUND    T          T                  UNKNOWN    -      -      -     
+57       59           T_SIG7               NOT_FOUND    T          T                  UNKNOWN    -      -      -     
+58       60           T_SIG8               NOT_FOUND    T          T                  UNKNOWN    -      -      -     
+59       61           T_SIG9               NOT_FOUND    T          T                  UNKNOWN    -      -      -     
+60       62           T_SIG10              NOT_FOUND    T          T                  UNKNOWN    -      -      -     
+61       63           VSS%C%VSSC3          PVSS1DG      T          T                  G          -      -      -     
+0        64           POWERCUT03           PRDIODE      T          T                  -          -      -      -     
+62       65           T_SIG11              NOT_FOUND    T          T                  UNKNOWN    -      -      -     
+63       66           T_SIG12              NOT_FOUND    T          T                  UNKNOWN    -      -      -     
+64       67           T_SIG13              NOT_FOUND    T          T                  UNKNOWN    -      -      -     

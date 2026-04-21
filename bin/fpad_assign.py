@@ -88,15 +88,16 @@ class Parser:
                         cols = line.split()
                         if len(cols) >= 5:
                             row = {
-                                'PIN_NUM':      cols[0],
-                                'DIE_PAD_NUM':  cols[1],
-                                'PIN_NAME':     cols[2],
-                                'IO_CELL_NAME': cols[3],
-                                'LOCATION':     cols[4],
-                                'DIRECTION':    cols[5] if len(cols) > 5 else '-',
-                                'LOAD':         cols[6] if len(cols) > 6 else '-',
-                                'SLEW':         cols[7] if len(cols) > 7 else '-',
-                                'SSO':          cols[8] if len(cols) > 8 else '-',
+                                'PIN_NUM':          cols[0],
+                                'DIE_PAD_NUM':      cols[1],
+                                'PIN_NAME':         cols[2],
+                                'IO_CELL_NAME':     cols[3],
+                                'LOCATION':         cols[4],
+                                'DIE_PAD_NUM_LOC':  cols[5] if len(cols) > 5 else cols[4],
+                                'DIRECTION':        cols[6] if len(cols) > 6 else '-',
+                                'LOAD':             cols[7] if len(cols) > 7 else '-',
+                                'SLEW':             cols[8] if len(cols) > 8 else '-',
+                                'SSO':              cols[9] if len(cols) > 9 else '-',
                                 'INST_NAME':    '-'
                             }
                             self.data.append(row)
@@ -231,23 +232,38 @@ class PDFGen:
         parts = pkg_str.split()
         l_cnt, b_cnt, r_cnt, t_cnt = map(int, parts[1:5]) if len(parts) >= 5 else (16, 16, 16, 16)
 
+        # 1. Group data by side
         pkg_data_by_side = {'L': [], 'B': [], 'R': [], 'T': []}
         apr_data_by_side = {'L': [], 'B': [], 'R': [], 'T': []}
+        t_pins_early = []
+        found_other_side = False
         seen_pnums = set()
+        
         for row in self.parser.data:
-            loc = row['LOCATION'].upper()
-            if loc not in pkg_data_by_side: continue
-            
-            # PKG side: Skip NC AND POWERCUT
+            p_loc = row['LOCATION'].upper()
+            a_loc = row['DIE_PAD_NUM_LOC'].upper()
             pnum = row['PIN_NUM']
             pname = row['PIN_NAME'].upper()
-            if pnum not in ('0', '-', 'NC') and 'POWERCUT' not in pname and pnum not in seen_pnums:
-                pkg_data_by_side[loc].append(row)
-                seen_pnums.add(pnum)
             
-            # APR side: Skip only NC
-            if pname != 'NC':
-                apr_data_by_side[loc].append(row)
+            # PKG side: Original logic (L,B,R,T order of appearance)
+            if p_loc in pkg_data_by_side:
+                if pnum not in ('0', '-', 'NC') and 'POWERCUT' not in pname and pnum not in seen_pnums:
+                    pkg_data_by_side[p_loc].append(row)
+                    seen_pnums.add(pnum)
+            
+            # APR side: Special logic for 'T' pins at the beginning
+            if pname != 'NC' and a_loc in apr_data_by_side:
+                if a_loc != 'T':
+                    found_other_side = True
+                    apr_data_by_side[a_loc].append(row)
+                else:
+                    if not found_other_side:
+                        t_pins_early.append(row)
+                    else:
+                        apr_data_by_side['T'].append(row)
+        
+        # Append early T pins to the end of APR T side
+        apr_data_by_side['T'].extend(t_pins_early)
 
         edge_pkg, edge_apr = 350, 200
         c.setLineWidth(2)
@@ -282,10 +298,21 @@ class PDFGen:
         edge = 350
         c.setLineWidth(2); c.rect(cx - edge/2, cy - edge/2, edge, edge)
         data_by_side = {'L': [], 'B': [], 'R': [], 'T': []}
+        t_pins_early = []
+        found_other_side = False
         for row in self.parser.data:
             if row['PIN_NAME'].upper() == 'NC': continue
-            loc = row['LOCATION'].upper()
-            if loc in data_by_side: data_by_side[loc].append(row)
+            loc = row['DIE_PAD_NUM_LOC'].upper()
+            if loc in data_by_side:
+                if loc != 'T':
+                    found_other_side = True
+                    data_by_side[loc].append(row)
+                else:
+                    if not found_other_side:
+                        t_pins_early.append(row)
+                    else:
+                        data_by_side['T'].append(row)
+        data_by_side['T'].extend(t_pins_early)
         pkg_str = self.parser.header.get('PACKAGE', '64 16 16 16 16')
         parts = pkg_str.split()
         l_cnt, b_cnt, r_cnt, t_cnt = map(int, parts[1:5]) if len(parts) >= 5 else (16, 16, 16, 16)
@@ -371,9 +398,15 @@ class PDFGen:
             num_str = pin['DIE_PAD_NUM'] if mode == 'APR' else pin['PIN_NUM']
             try:
                 n_int = int(num_str)
-                # 1. Draw Start Dot for Pin 1 (Skip for combined inner APR)
+                # 1. Draw Start Dot (PKG uses Pin 1, APR uses first pin of Side L)
+                draw_dot = False
+                if mode == 'PKG':
+                    if n_int == 1: draw_dot = True
+                else: # APR mode
+                    if side == 'L' and idx == 1: draw_dot = True
+
                 is_combined_inner_apr = (mode == 'APR' and label_inside)
-                if n_int == 1 and not is_combined_inner_apr:
+                if draw_dot and not is_combined_inner_apr:
                     dot_r = 6
                     dot_x, dot_y = px + bw/2, py + bh/2
                     if side == 'L': dot_x += bw + 12
@@ -454,10 +487,10 @@ class Writer:
                 for k, v in sorted(self.parser.header.items()):
                     f.write(f"{k:<20} : {v}\n")
                 f.write("\n")
-                f.write(f"{'PIN_NUM':<8} {'DIE_PAD_NUM':<12} {'PIN_NAME':<20} {'IO_CELL_NAME':<12} {'LOCATION':<8} {'DIRECTION':<10} {'LOAD':<6} {'SLEW':<6} {'SSO':<6}\n")
-                f.write("-" * 100 + "\n")
+                f.write(f"{'PIN_NUM':<8} {'DIE_PAD_NUM':<12} {'PIN_NAME':<20} {'IO_CELL_NAME':<12} {'LOCATION':<10} {'DIE_PAD_NUM_LOC':<18} {'DIRECTION':<10} {'LOAD':<6} {'SLEW':<6} {'SSO':<6}\n")
+                f.write("-" * 120 + "\n")
                 for r in self.parser.data:
-                    f.write(f"{r['PIN_NUM']:<8} {r['DIE_PAD_NUM']:<12} {r['PIN_NAME']:<20} {r['IO_CELL_NAME']:<12} {r['LOCATION']:<8} {r['DIRECTION']:<10} {r['LOAD']:<6} {r['SLEW']:<6} {r['SSO']:<6}\n")
+                    f.write(f"{r['PIN_NUM']:<8} {r['DIE_PAD_NUM']:<12} {r['PIN_NAME']:<20} {r['IO_CELL_NAME']:<12} {r['LOCATION']:<10} {r['DIE_PAD_NUM_LOC']:<18} {r['DIRECTION']:<10} {r['LOAD']:<6} {r['SLEW']:<6} {r['SSO']:<6}\n")
         except Exception as e:
             self.logger.error(f"Error in writer: {e}")
 
