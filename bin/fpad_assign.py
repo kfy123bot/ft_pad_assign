@@ -413,6 +413,8 @@ class PDFGen:
         apr_t_early = []
         apr_found_l = False
         seen_pnums = set()
+        # Collect D1.xx rows for inner bound connections
+        d1xx_rows = []
         
         for row in self.parser.data:
             p_loc = row['LOCATION'].upper()
@@ -433,11 +435,15 @@ class PDFGen:
             # Skip NC, DOWNBOUND, and DIE_PAD_NUM='0' or '-' (no die pad)
             if pname not in ('NC', 'DOWNBOUND') and row['DIE_PAD_NUM'] not in ('0', '-') and a_loc in apr_data_by_side:
                 if a_loc == 'L': apr_found_l = True
-                
+
                 if a_loc == 'T' and not apr_found_l:
                     apr_t_early.append(row)
                 else:
                     apr_data_by_side[a_loc].append(row)
+
+            # Collect D1.xx rows for inner bound connections (both D1.xx and (D1.xx) formats)
+            if pnum.startswith('D1.') or pnum.startswith('(D1.'):
+                d1xx_rows.append(row)
         
         # Move early APR T pins to the end
         apr_data_by_side['T'].extend(apr_t_early)
@@ -445,14 +451,14 @@ class PDFGen:
         edge_pkg, edge_apr = 350, 200
         c.setLineWidth(2)
         c.rect(cx - edge_pkg/2, cy - edge_pkg/2, edge_pkg, edge_pkg)
-        c.setDash(4, 2); c.rect(cx - edge_apr/2, cy - edge_apr/2, edge_apr, edge_apr); c.setDash()
+        c.rect(cx - edge_apr/2, cy - edge_apr/2, edge_apr, edge_apr)
 
         pkg_coords, apr_coords = {}, {}
         pkg_edge = {'L': cx - edge_pkg/2, 'R': cx + edge_pkg/2, 'B': cy - edge_pkg/2, 'T': cy + edge_pkg/2}
         for side in ('L', 'B', 'R', 'T'):
             p_coords = self._draw_side_boxes(c, side, pkg_data_by_side[side], cx, cy, edge_pkg, getattr(self, f"_{side}_pos")(cx, cy, edge_pkg), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'PKG', label_inside=False)
             pkg_coords.update(p_coords)
-            a_coords = self._draw_side_boxes(c, side, apr_data_by_side[side], cx, cy, edge_apr, getattr(self, f"_{side}_pos")(cx, cy, edge_apr), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'APR', label_inside=False, apr_max_label_extent=pkg_edge[side])
+            a_coords = self._draw_side_boxes(c, side, apr_data_by_side[side], cx, cy, edge_apr, getattr(self, f"_{side}_pos")(cx, cy, edge_apr), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'APR', label_inside=False, max_label_extent=pkg_edge[side])
             apr_coords.update(a_coords)
 
         c.setLineWidth(0.3)
@@ -482,24 +488,99 @@ class PDFGen:
 
                 # Calculate wire start (PKG pin) and end (APR pin)
                 if side == 'L':
-                    wire_start = (p_pt[0], p_pt[1])
-                    wire_end = (a_pt[0], a_pt[1])
+                    wire_start = (p_pt['pt'][0], p_pt['pt'][1])
+                    wire_end = (a_pt['pt'][0], a_pt['pt'][1])
                 elif side == 'R':
-                    wire_start = (p_pt[0], p_pt[1])
-                    wire_end = (a_pt[0], a_pt[1])
+                    wire_start = (p_pt['pt'][0], p_pt['pt'][1])
+                    wire_end = (a_pt['pt'][0], a_pt['pt'][1])
                 elif side == 'B':
-                    wire_start = (p_pt[0], p_pt[1])
-                    wire_end = (a_pt[0], a_pt[1])
+                    wire_start = (p_pt['pt'][0], p_pt['pt'][1])
+                    wire_end = (a_pt['pt'][0], a_pt['pt'][1])
                 elif side == 'T':
-                    wire_start = (p_pt[0], p_pt[1])
-                    wire_end = (a_pt[0], a_pt[1])
+                    wire_start = (p_pt['pt'][0], p_pt['pt'][1])
+                    wire_end = (a_pt['pt'][0], a_pt['pt'][1])
                 else:
-                    wire_start, wire_end = p_pt, a_pt
+                    wire_start, wire_end = p_pt['pt'], a_pt['pt']
 
                 dir_color = colors.grey
                 if row['DIRECTION'] == 'P': dir_color = colors.red
                 elif row['DIRECTION'] == 'G': dir_color = colors.blue
                 c.setStrokeColor(dir_color); c.line(wire_start[0], wire_start[1], wire_end[0], wire_end[1])
+
+        # Draw inner bound red lines for D1.xx connections
+        # D1.xx yy → from DIE_PAD_NUM=xx to DIE_PAD_NUM=yy
+        # (D1.xx) yy → from DIE_PAD_NUM=yy to DIE_PAD_NUM=xx
+        # APR pin shape extends toward chip center, wire connects to extended endpoint
+        if d1xx_rows:
+            self.logger.info(f"Inner Bound connections: {len(d1xx_rows)} wires")
+            box_thickness = max(1, min(edge_apr * 0.8 / max(l_cnt, b_cnt, r_cnt, t_cnt), 6))
+
+            for row in d1xx_rows:
+                pnum = row['PIN_NUM']
+                die_yy = row['DIE_PAD_NUM']
+
+                # Skip if yy is invalid
+                if not die_yy or die_yy in ('0', '-'):
+                    continue
+
+                # Extract xx from PIN_NUM=D1.xx
+                xx = pnum.split('.')[1].rstrip(')')
+
+                # Determine source and dest based on parentheses
+                if pnum.startswith('('):
+                    # (D1.xx) yy → yy -> xx
+                    source, dest = die_yy, xx
+                else:
+                    # D1.xx yy → xx -> yy
+                    source, dest = xx, die_yy
+
+                self.logger.info(f"  Wire: {source} -> {dest}")
+
+                pin_src = apr_coords.get(source)
+                pin_dst = apr_coords.get(dest)
+                if not pin_src or not pin_dst:
+                    self.logger.warn(f"  Skipping {source}->{dest}: missing coordinate")
+                    continue
+
+                pt_src = pin_src['pt']
+                pt_dst = pin_dst['pt']
+                bw_src = pin_src['bw']
+                bh_src = pin_src['bh']
+                bw_dst = pin_dst['bw']
+                bh_dst = pin_dst['bh']
+                side_src = pin_src['side']
+                side_dst = pin_dst['side']
+
+                # Find directions for source and dest
+                dir_src = dir_dst = None
+                for r in self.parser.data:
+                    if r['DIE_PAD_NUM'] == source:
+                        dir_src = r['DIRECTION']
+                    if r['DIE_PAD_NUM'] == dest:
+                        dir_dst = r['DIRECTION']
+
+                # Determine colors based on direction
+                def get_pin_color(direction):
+                    if direction == 'P': return colors.red
+                    elif direction == 'G': return colors.blue
+                    return colors.black
+
+                color_src = get_pin_color(dir_src) if dir_src else colors.black
+                color_dst = get_pin_color(dir_dst) if dir_dst else colors.black
+
+                # Calculate extended pin positions
+                ext_src = self._extend_point_toward_center(pt_src, side_src, bh_src, cx, cy)
+                ext_dst = self._extend_point_toward_center(pt_dst, side_dst, bh_dst, cx, cy)
+
+                # Draw extended pin shapes with correct colors and dimensions
+                c.setStrokeColor(colors.red); c.setLineWidth(0.5)
+                self._draw_extended_pin(c, pt_src, side_src, bw_src, bh_src, color_src)
+                self._draw_extended_pin(c, pt_dst, side_dst, bw_dst, bh_dst, color_dst)
+
+                # Draw inner bound red line connecting the extended endpoints
+                c.setStrokeColor(colors.red)
+                c.line(ext_src[0], ext_src[1], ext_dst[0], ext_dst[1])
+                self.logger.info(f"  Drew: {source}({side_src},{dir_src}) -> {dest}({side_dst},{dir_dst})")
 
         self._draw_center_info(c, cx, cy, edge_apr, l_cnt, b_cnt, r_cnt, t_cnt, apr_data_by_side)
         c.save()
@@ -531,8 +612,12 @@ class PDFGen:
         parts = pkg_str.split()
         l_cnt, b_cnt, r_cnt, t_cnt = map(int, parts[1:5]) if len(parts) >= 5 else (16, 16, 16, 16)
         self._draw_center_info(c, cx, cy, edge, l_cnt, b_cnt, r_cnt, t_cnt, data_by_side)
+        apr_edge = {'L': cx - edge/2, 'R': cx + edge/2, 'B': cy - edge/2, 'T': cy + edge/2}
+        header_bottom = 510
         for side in ('L', 'B', 'R', 'T'):
-            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'APR', label_inside=False)
+            limit = apr_edge[side]
+            if side == 'T': limit = header_bottom
+            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'APR', label_inside=False, max_label_extent=limit)
         c.save()
 
     def generate_pkg_pdf(self, filename):
@@ -582,8 +667,12 @@ class PDFGen:
         parts = pkg_str.split()
         l_cnt, b_cnt, r_cnt, t_cnt = map(int, parts[1:5]) if len(parts) >= 5 else (16, 16, 16, 16)
         self._draw_center_info(c, cx, cy, edge, l_cnt, b_cnt, r_cnt, t_cnt, data_by_side)
+        pkg_edge = {'L': cx - edge/2, 'R': cx + edge/2, 'B': cy - edge/2, 'T': cy + edge/2}
+        header_bottom = 510
         for side in ('L', 'B', 'R', 'T'):
-            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'PKG', label_inside=False)
+            limit = pkg_edge[side]
+            if side == 'T': limit = header_bottom
+            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'PKG', label_inside=False, max_label_extent=limit)
         c.save()
 
     def _L_pos(self, cx, cy, edge): return (cx - edge/2, cy)
@@ -591,7 +680,7 @@ class PDFGen:
     def _R_pos(self, cx, cy, edge): return (cx + edge/2, cy)
     def _T_pos(self, cx, cy, edge): return (cx, cy + edge/2)
 
-    def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False, apr_max_label_extent=None):
+    def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False, max_label_extent=None):
         bx, by = b_pos; coords = {}
         if not pins: return coords
         actual_cnt = len(pins); calc_total = max(actual_cnt, total); step = length / (calc_total + 1)
@@ -603,16 +692,16 @@ class PDFGen:
             px, py = 0, 0; bw, bh = 0, 0
             if side == 'L':
                 bw, bh = box_len, box_thickness; px = bx - (0 if label_inside else bw); py = (by + length/2) - (idx * step) - (bh/2)
-                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = (bx, py + bh/2)
+                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = {'pt': (bx, py + bh/2), 'bw': bw, 'bh': bh, 'side': side}
             elif side == 'B':
                 bw, bh = box_thickness, box_len; px = (bx - length/2) + (idx * step) - (bw/2); py = by - (0 if label_inside else bh)
-                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = (px + bw/2, by)
+                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = {'pt': (px + bw/2, by), 'bw': bw, 'bh': bh, 'side': side}
             elif side == 'R':
                 bw, bh = box_len, box_thickness; px = bx - (bw if label_inside else 0); py = (by - length/2) + (idx * step) - (bh/2)
-                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = (bx, py + bh/2)
+                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = {'pt': (bx, py + bh/2), 'bw': bw, 'bh': bh, 'side': side}
             elif side == 'T':
                 bw, bh = box_thickness, box_len; px = (bx + length/2) - (idx * step) - (bw/2); py = by - (bh if label_inside else 0)
-                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = (px + bw/2, by)
+                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = {'pt': (px + bw/2, by), 'bw': bw, 'bh': bh, 'side': side}
             c.setLineWidth(0.5); c.setStrokeColor(colors.black); direction = pin['DIRECTION']
             if 'POWERCUT' in pname.upper(): c.setFillColor(colors.black); c.rect(px, py, bw, bh, fill=1)
             elif pname.upper() == 'NC': c.setFillColor(colors.black); c.rect(px, py, bw, bh, fill=1)
@@ -620,27 +709,36 @@ class PDFGen:
             elif direction == 'G': c.setFillColor(colors.blue); c.rect(px, py, bw, bh, fill=1)
             else: c.rect(px, py, bw, bh, fill=0)
             c.setFillColor(colors.black)
-            # For APR in combined mode, check if label would extend beyond PKG frame
+            # Check if label would extend beyond boundary (page edge, header, or outer frame)
             small_font = font_size
-            if mode == 'APR' and apr_max_label_extent is not None:
+            if max_label_extent is not None:
                 char_width = font_size * 0.6
                 name_len = len(display_name)
                 label_extent = name_len * char_width
+                # Header boundary for T side (labels go upward)
+                header_bottom = 510 if side == 'T' else None
                 if side == 'L':
                     label_end = px - 4
-                    if label_end - label_extent < apr_max_label_extent:
+                    limit = max_label_extent
+                    if label_end - label_extent < limit:
                         small_font = max(2, font_size - 2)
                 elif side == 'R':
                     label_end = px + bw + 4 + label_extent
-                    if label_end > apr_max_label_extent:
+                    limit = max_label_extent
+                    if label_end > limit:
                         small_font = max(2, font_size - 2)
                 elif side == 'B':
                     label_end = py - 4
-                    if label_end - label_extent < apr_max_label_extent:
+                    limit = max_label_extent
+                    if label_end - label_extent < limit:
                         small_font = max(2, font_size - 2)
                 elif side == 'T':
                     label_end = py + bh + 4 + label_extent
-                    if label_end > apr_max_label_extent:
+                    # Check against both max_label_extent and header boundary
+                    limit = max_label_extent
+                    if header_bottom is not None:
+                        limit = min(limit, header_bottom) if limit else header_bottom
+                    if label_end > limit:
                         small_font = max(2, font_size - 2)
             c.setFont("Helvetica", small_font)
             if side == 'L':
@@ -688,6 +786,54 @@ class PDFGen:
                 pass
         return coords
 
+    def _extend_point_toward_center(self, pt, side, distance, cx, cy):
+        """Extend a point toward chip center by given distance."""
+        x, y = pt
+        if side == 'L':
+            return (x + distance, y)
+        elif side == 'R':
+            return (x - distance, y)
+        elif side == 'B':
+            return (x, y + distance)
+        elif side == 'T':
+            return (x, y - distance)
+        return pt
+
+    def _draw_extended_pin(self, c, frame_edge_pt, side, box_len, box_thickness, color):
+        """Draw an extended pin shape with SAME shape as original pin, starting from frame edge.
+        frame_edge_pt: point on the inner edge of APR frame for this side
+        box_len: length of pin shape (perpendicular to edge, same as original)
+        box_thickness: thickness extending toward chip center (same as original)
+        color: fill color
+
+        NOTE: Due to parameter passing, box_len and box_thickness meanings swap for B/T sides
+        L side: original = (box_len x box_thickness) horizontal
+        R side: original = (box_len x box_thickness) horizontal
+        T side: original = (box_thickness x box_len) vertical [parameters swapped in call]
+        B side: original = (box_thickness x box_len) vertical [parameters swapped in call]
+        """
+        x, y = frame_edge_pt
+        c.setFillColor(color); c.setStrokeColor(color); c.setLineWidth(0.5)
+        if side == 'L':
+            # Original pin: (box_len x box_thickness) at frame edge
+            # Extended: same shape, starts at frame inner edge, extends inward
+            c.rect(x, y - box_thickness/2, box_len, box_thickness, fill=0, stroke=1)
+        elif side == 'R':
+            # Original pin: (box_len x box_thickness) at frame edge
+            # Extended: same shape, starts at frame inner edge, extends inward
+            c.rect(x - box_len, y - box_thickness/2, box_len, box_thickness, fill=0, stroke=1)
+        elif side == 'B':
+            # B side: frame at y=350, chip center at y=240, toward center = upward (y increases)
+            # Original pin: (box_len x box_thickness) where box_len=bw(width), box_thickness=bh(height)
+            # Extended: width scaled to 80%, height=box_thickness, bottom at y, extending upward
+            width = box_len * 0.8
+            c.rect(x - width/2, y, width, box_thickness, fill=0, stroke=1)
+        elif side == 'T':
+            # T side: frame at y=130, chip center at y=240, toward center = downward (y decreases)
+            # Original pin: (box_len x box_thickness) where box_len=bw(width), box_thickness=bh(height)
+            # Extended: width scaled to 80%, height=box_thickness, top at y, extending downward
+            width = box_len * 0.8
+            c.rect(x - width/2, y - box_thickness, width, box_thickness, fill=0, stroke=1)
 
     def _draw_header(self, c, title, width, height):
         c.setLineWidth(1); c.setStrokeColor(colors.black); c.rect(50, height - 85, width - 100, 65)

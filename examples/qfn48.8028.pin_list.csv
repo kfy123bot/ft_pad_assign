@@ -1,4 +1,4 @@
-PRODUCTION NO.   : PROJECT_QFN64_TEST,,,,,,,,,
+PRODUCTION NO.   : PROJECT_QFN48_TEST,,,,,,,,,
 PKG_TOP_LEFT_PIN : 1,,,,,,,,,
 PACKAGE,,: 48QFN 12 12 12 12,,,,,,,
 VERSION,,: V1.0_20240418,,,,,,,
@@ -54,8 +54,8 @@ PKG_NUM,DIE_NUM,PIN_NAME,IO_CELL_NAME,PKG_LOC,DIE_LOC,DIRECTION,LOAD,SLEW,SSO
 D1.77,33,VDD11%C%U_VDD11_APR0,-,-,B,P,-,-,-
 D1.77,33,VDD11%C%U_VDD11_APR0,-,-,B,P,-,-,-
 0,34,VDD33_IOB,-,-,B,P,-,-,-
-D1.67,0,-,-,-,B,-,-,-,-
-D1.67,0,-,-,-,B,-,-,-,-
+D1.67,35,VDD34_IOB,-,-,B,-,-,-,-
+D1.67,35,VDD35_IOB,-,-,B,-,-,-,-
 0,36,GND%C%U_AIP_TOP/U_GND_APR0,-,-,B,G,-,-,-
 0,36,GND%C%U_AIP_TOP/U_GND_APR0,-,-,B,G,-,-,-
 0,37,GPIO1,-,-,B,-,-,-,-
@@ -64,7 +64,7 @@ D1.67,0,-,-,-,B,-,-,-,-
 20,40,GPIO4,-,B,B,-,-,-,-
 0,41,GND%C%U_AIP_TOP/U_GND_APR2,-,-,B,G,-,-,-
 0,0,-,-,-,B,-,-,-,-
-D1.61,43,PAD_TX_VDDA33,-,-,B,P,-,-,-
+D1.61,43,PAD_TX_VDDA33,-,-,B,P,-,-,TX
 21,44,TX_A0P,-,B,R,-,-,-,TX
 0,45,PAD_TX_VSSA11,-,-,R,G,-,-,TX
 22,46,TX_A0N,-,B,R,-,-,-,TX
@@ -131,3 +131,14 @@ D1.91,94,VDD11%C%U_VDD11_APR3,-,-,T,P,-,-,-
 46,100,TEST,-,T,T,-,-,-,-
 47,102,GPIO14,-,T,T,-,-,-,-
 48,101,GPIO15,-,T,T,-,-,-,-
+,,,,,,,,,
+,,,,,,,,,
+Inner bound,,,,,,,,,
+,1,I0 (X.Y),I1 (X.Y),,,,,,
+,2,I2 (X.Y),(X.Y),,,,,,
+,3,(X.Y),(X.Y),,,,,,
+,4,(X.Y),(X.Y),,,,,,
+,5,(X.Y),(X.Y),,,,,,
+,6,(X.Y),(X.Y),,,,,,
+,7,(X.Y),(X.Y),,,,,,
+,8,(X.Y),(X.Y),,,,,,
