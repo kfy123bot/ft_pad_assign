@@ -1,5 +1,0 @@
---- FPAD_ASSIGN Execution Log (2026-04-21 19:59:05.792868) ---
-Project: fpad_out
-[INFO ] Log file initialized: test_output/fpad_out.log
-[INFO ] Reading Pin List: examples/example.pin_list
-[FATAL] File not found: examples/example.pin_list
