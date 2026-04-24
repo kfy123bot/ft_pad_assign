@@ -20,13 +20,13 @@ make help
 
 ## Development Workflow
 
-**Important:** Hooks are disabled per user preference. Follow explicit user commands only — do not automatically commit, push, or sync changes.
+**Critical:** NEVER automatically commit or push changes. Wait for explicit user commands.
 
 When working on code changes:
 1. Make changes as requested
 2. Test using `make test_py` when modifying PDF generation, parsing, or pin logic
 3. Report results and any issues to the user
-4. Wait for explicit user approval before any git operations (commit, push, etc.)
+4. **DO NOT** commit, push, or sync unless user explicitly asks for it
 
 ## Key Development Files
 

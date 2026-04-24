@@ -514,7 +514,7 @@ class PDFGen:
         self.logger.info("Generating Combined (PKG+APR) Diagram with Bonding Wires...")
         c = canvas.Canvas(filename, pagesize=landscape(A4))
         width, height = landscape(A4)
-        cx, cy = width / 2, 240
+        cx, cy = width / 2, 265
         self._draw_header(c, "COMBINED BONDING DIAGRAM", width, height)
 
         pkg_str = self.parser.header.get('PACKAGE', '64 16 16 16 16')
@@ -1059,8 +1059,6 @@ class PDFGen:
             count: Total number of ground wires for this pin
             idx: Which wire (0-based) for offset calculation
         """
-        from collections import Counter
-
         # Calculate offset for multiple ground wires (centered)
         offset = (idx - (count - 1) / 2) * 4
 
