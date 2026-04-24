@@ -8,7 +8,7 @@ CPP_BIN = bin/fpad_assign_cpp
 PY_BIN  = bin/fpad_assign.py
 PL_BIN  = bin/fpad_assign.pl
 
-EXAMPLES = examples/example.pin_list examples/qfn64.pin_list
+EXAMPLES = examples/qfn48.8028.pin_list.csv
 V_FILES = examples/*.v
 
 # --- Main Targets ---
@@ -24,7 +24,7 @@ build: $(CPP_SRC)
 test_py:
 	@echo "--- Testing Python Version ---"
 	@for list in $(EXAMPLES); do \
-		python3 $(PY_BIN) -list $$list -v $(V_FILES) -all; \
+		python3 $(PY_BIN) -list $$list -v $(V_FILES) -all -o test_out ; \
 	done
 	@echo "Python tests complete."
 
