@@ -589,8 +589,8 @@ class PDFGen:
         if not HAS_REPORTLAB: return
         self.logger.info(f"Generating APR Diagram: {filename}")
         c = canvas.Canvas(filename, pagesize=landscape(A4)); width, height = landscape(A4)
-        cx, cy = width/2, 240; self._draw_header(c, "APR PIN DIAGRAM", width, height)
-        edge = 350
+        cx, cy = width/2, 255; self._draw_header(c, "APR PIN DIAGRAM", width, height)
+        edge = 280
         c.setLineWidth(2); c.rect(cx - edge/2, cy - edge/2, edge, edge)
         data_by_side = {'L': [], 'B': [], 'R': [], 'T': []}
         t_early = []
@@ -614,18 +614,20 @@ class PDFGen:
         self._draw_center_info(c, cx, cy, edge, l_cnt, b_cnt, r_cnt, t_cnt, data_by_side)
         apr_edge = {'L': cx - edge/2, 'R': cx + edge/2, 'B': cy - edge/2, 'T': cy + edge/2}
         header_bottom = 510
+        # For APR, use max pin count to ensure uniform font size across all 4 sides
+        max_cnt = max(l_cnt, b_cnt, r_cnt, t_cnt)
         for side in ('L', 'B', 'R', 'T'):
             limit = apr_edge[side]
             if side == 'T': limit = header_bottom
-            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'APR', label_inside=False, max_label_extent=limit)
+            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), max_cnt, 'APR', label_inside=False, max_label_extent=limit, allow_overflow=True)
         c.save()
 
     def generate_pkg_pdf(self, filename):
         if not HAS_REPORTLAB: return
         self.logger.info(f"Generating PKG Diagram: {filename}")
         c = canvas.Canvas(filename, pagesize=landscape(A4)); width, height = landscape(A4)
-        cx, cy = width/2, 240; self._draw_header(c, "PACKAGE PIN DIAGRAM", width, height)
-        edge = 350
+        cx, cy = width/2, 255; self._draw_header(c, "PACKAGE PIN DIAGRAM", width, height)
+        edge = 280
         c.setLineWidth(2); c.rect(cx - edge/2, cy - edge/2, edge, edge)
         pkg_data = {}; order = []
         for row in self.parser.data:
@@ -669,10 +671,12 @@ class PDFGen:
         self._draw_center_info(c, cx, cy, edge, l_cnt, b_cnt, r_cnt, t_cnt, data_by_side)
         pkg_edge = {'L': cx - edge/2, 'R': cx + edge/2, 'B': cy - edge/2, 'T': cy + edge/2}
         header_bottom = 510
+        # For PKG, use max pin count to ensure uniform font size across all 4 sides
+        max_cnt = max(l_cnt, b_cnt, r_cnt, t_cnt)
         for side in ('L', 'B', 'R', 'T'):
             limit = pkg_edge[side]
             if side == 'T': limit = header_bottom
-            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'PKG', label_inside=False, max_label_extent=limit)
+            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), max_cnt, 'PKG', label_inside=False, max_label_extent=limit)
         c.save()
 
     def _L_pos(self, cx, cy, edge): return (cx - edge/2, cy)
@@ -680,11 +684,12 @@ class PDFGen:
     def _R_pos(self, cx, cy, edge): return (cx + edge/2, cy)
     def _T_pos(self, cx, cy, edge): return (cx, cy + edge/2)
 
-    def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False, max_label_extent=None):
+    def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False, max_label_extent=None, allow_overflow=False):
         bx, by = b_pos; coords = {}
         if not pins: return coords
         actual_cnt = len(pins); calc_total = max(actual_cnt, total); step = length / (calc_total + 1)
-        box_thickness = max(1, min(step * 0.8, 6)); font_size = max(2, min(step * 0.9, 7))
+        box_thickness = max(1, min(step * 0.8, 6)); font_size = max(2, min(step * 0.9, 8))
+        if mode == 'PKG': font_size = min(font_size + 1, 10)
         box_len = 15 if mode == 'APR' else 25
         for idx, pin in enumerate(pins, 1):
             pname = pin['PIN_NAME']; display_name = pname
@@ -711,7 +716,7 @@ class PDFGen:
             c.setFillColor(colors.black)
             # Check if label would extend beyond boundary (page edge, header, or outer frame)
             small_font = font_size
-            if max_label_extent is not None:
+            if max_label_extent is not None and not allow_overflow:
                 char_width = font_size * 0.6
                 name_len = len(display_name)
                 label_extent = name_len * char_width
@@ -752,8 +757,8 @@ class PDFGen:
                 c.restoreState()
             elif side == 'B':
                 c.saveState()
-                c.translate(px + bw/2, py - 4)
-                c.rotate(270); c.drawString(0, -small_font/2, display_name)
+                c.translate(px, py - 4)
+                c.rotate(270); c.drawString(0, 0, display_name)
                 c.restoreState()
 
             # --- Pin Numbering (1, 5, 10...) and Start Dot (Pin 1) ---
