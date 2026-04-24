@@ -473,3 +473,204 @@ python3 bin/fpad_assign.py -list examples/qfn48.8028.pin_list.csv -o test_combin
 - 函數簽名變更：1 個（`_draw_side_boxes()` 加參數）
 - 呼叫位置變更：2 個（`generate_apr_pdf()` / `generate_pkg_pdf()`）
 - 核心邏輯變更：1 個（overflow 檢查條件）
+
+---
+
+## 修改歷史（2026-04-24）— Inner Bound 對稱性檢查與多重線
+
+### Inner Bound 對稱性規則
+
+**核心配對邏輯**：
+- `PKG_NUM=D1.90, DIE_NUM=1` 與 `PKG_NUM=D1.1, DIE_NUM=90` 是一對
+- 意思是：DIE_NUM(90) ↔ DIE_NUM(1) 雙向連接
+
+**對稱性判斷**：
+| 組合 | 類型 | 線條樣式 |
+|------|------|---------|
+| A→B 且 B→A 同時存在 | Symmetric | 實線（solid） |
+| 只有 A→B 或只有 B→A | Asymmetric | 虛線（dashed）+ ERROR |
+
+**範例**：
+```
+D1.90 + DIE_NUM=1  → source=90, dest=1
+D1.1 + DIE_NUM=90  → source=1, dest=90
+
+90→1 存在，且 1→90 也存在 → Symmetric → 實線
+```
+
+### Inner Bound 多重線偏移規則
+
+當同一個 (source, dest) 組合出現多次時，繪製多條平行線：
+
+| 出現次數 | 偏移量 | 說明 |
+|---------|--------|------|
+| 1 | 0 | 1條線，無偏移 |
+| 2 | -2, +2 | 2條線，上下分開 |
+| 3 | -4, 0, +4 | 3條線，均勻分布 |
+
+**偏移方向**：
+- L/R 邊：Y 軸偏移（上下分開）
+- B/T 邊：X 軸偏移（左右分開）
+
+**偏移計算公式**：
+```python
+offset = (i - (count - 1) / 2) * 2
+# i: 第幾條線 (0, 1, 2, ...)
+# count: 總共幾條線
+```
+
+### 代碼位置
+
+| 功能 | 函數 | 行號 |
+|------|------|------|
+| Inner Bound 分組收集 | `generate_combined_pdf()` | ~638-670 |
+| 對稱性判斷 | `generate_combined_pdf()` | ~711-713 |
+| 多重線繪製 | `generate_combined_pdf()` | ~715-743 |
+
+### 實作細節
+
+```python
+# 1. 分組統計
+direction_map = {}  # (source, dest) -> list of rows
+for row in d1xx_rows:
+    key = (source, dest)
+    direction_map[key].append(row)
+
+# 2. 檢查對稱性
+reverse_key = (dest, source)
+is_symmetric = reverse_key in direction_map
+
+# 3. 繪製多重線
+for i in range(count):
+    offset = (i - (count - 1) / 2) * 2
+    if side_src in ('L', 'R'):
+        src_x, src_y = ext_src[0], ext_src[1] + offset
+        dst_x, dst_y = ext_dst[0], ext_dst[1] + offset
+    else:
+        src_x, src_y = ext_src[0] + offset, ext_src[1]
+        dst_x, dst_y = ext_dst[0] + offset, ext_dst[1]
+```
+
+---
+
+## 修改歷史（2026-04-24）— DOWNBOUND 接地符號
+
+### DOWNBOUND 處理規則
+
+當 `DIE_PIN_NAME=DOWNBOUND` 時表示此封裝有 Downbound 方式。
+
+**接地線條件**：
+- `PKG_NUM=0`
+- `DIRECTION=G`
+- `DIE_NUM=aa` (有效的 DIE 墊片編號)
+
+**接地線數量**：
+- 根據相同的 `(DIE_NUM, DIE_PIN_NAME)` 組合出現次數決定
+- 出現 N 次 → 繪製 N 條接地線
+
+### 接地符號繪製
+
+**符號結構**：
+- 短線：從 APR pin往外延伸 12 points
+- 接地符號：倒 T 形（垂直線 + 3 條水平線）
+- 顏色：藍色 (colors.blue)
+
+**符號方向**：
+| 邊 | 方向 | 說明 |
+|----|------|------|
+| L | ← | 向左延伸 |
+| R | → | 向右延伸 |
+| B | ↓ | 向下延伸 |
+| T | ↑ | 向上延伸 |
+
+### 代碼位置
+
+| 功能 | 函數 | 行號 |
+|------|------|------|
+| 接地線收集 | `generate_combined_pdf()` | ~745-780 |
+| 接地符號繪製 | `_draw_ground_symbol()` | ~1052-1114 |
+
+### 實作細節
+
+```python
+# 收集 PKG_NUM=0 且 DIRECTION=G 的行
+ground_rows = []
+for row in self.parser.data:
+    if row['PKG_NUM'] == '0' and row['DIRECTION'] == 'G':
+        ground_rows.append(row)
+
+# 分組計算數量
+ground_counts = {}
+for row in ground_rows:
+    key = (row['DIE_NUM'], row['DIE_PIN_NAME'])
+    ground_counts[key] = ground_counts.get(key, 0) + 1
+
+# 繪製接地符號
+for (die_num, pin_name), count in ground_counts.items():
+    for i in range(count):
+        self._draw_ground_symbol(c, pt[0], pt[1], side, count, i)
+```
+
+### 接地符號符號（ground_sign.md）
+
+接地符號的標準繪製方式定義在 `ground_sign.md` 檔案中：
+- 垂直中心線
+- 空心倒三角形
+- GND 文字標註
+
+---
+
+## 修改歷史（2026-04-24）— Combined PDF 位置調整
+
+### 中心點上移
+
+**修改**：將 combined PDF 的中心點 Y 座標從 240 調整為 265
+
+**原因**：避免 B 邊的字體碰到紙張底部
+
+**位置**：`generate_combined_pdf()` 第 517 行
+```python
+cx, cy = width / 2, 265  # 原本是 240
+```
+
+### 動態 APR Frame 調整策略
+
+如果 B 邊上移後 T 邊碰到 header，可以考慮：
+1. 縮小 APR frame（edge_apr）
+2. 或保持當前設置（cy=265 對 QFN48 封裝已足夠）
+
+---
+
+## 完整驗證清單
+
+### Inner Bound 驗證
+- [ ] Symmetric 配對：90↔1, 75↔40 → 實線
+- [ ] Asymmetric 單向：只有 A→B → 虛線 + ERROR
+- [ ] 多重線：count=2 → 2條平行線（偏移 ±2）
+- [ ] 多重線：count=3 → 3條平行線（偏移 -4, 0, +4）
+
+### DOWNBOUND 驗證
+- [ ] PKG_NUM=0, DIRECTION=G → 接地符號
+- [ ] 多重接地：count=3 → 3條平行接地線
+- [ ] 接地符號方向正確（L←, R→, B↓, T↑）
+
+### Combined PDF 驗證
+- [ ] B 邊文字不碰到紙張底部
+- [ ] T 邊文字不碰到 header
+- [ ] APR 內框文字不碰到 PKG 外框
+- [ ] 所有線條正確繪製
+
+---
+
+## 指令速查
+
+```bash
+# 執行 Combined PDF 生成
+python3 bin/fpad_assign.py -list examples/qfn48.8028.pin_list.csv -o . -c -combined
+
+# 完整生成所有輸出
+python3 bin/fpad_assign.py -list <pin_list_file> -o <output_folder> -all
+
+# 測試輸出
+python3 bin/fpad_assign.py -list examples/example.pin_list -o output -all
+```
