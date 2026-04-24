@@ -742,6 +742,47 @@ class PDFGen:
                         if i == 0:
                             self.logger.error(f"  Asymmetric: {source} -> {dest}, drew DASHED line")
 
+        # Draw downbound ground symbols
+        # When PKG_NUM=0, DIRECTION=G, collect ground wire counts per DIE_NUM
+        ground_rows = []
+        for row in self.parser.data:
+            pnum = row['PKG_NUM']
+            direction = row['DIRECTION']
+
+            # Skip if not PKG_NUM=0 and DIRECTION=G
+            if pnum != '0' or direction != 'G':
+                continue
+
+            die_num = row['DIE_NUM']
+            # Skip invalid DIE_NUM
+            if die_num in ('0', '-', ''):
+                continue
+
+            ground_rows.append(row)
+
+        # Group by (die_num, die_pin_name) to count duplicates
+        ground_counts = {}
+        for row in ground_rows:
+            key = (row['DIE_NUM'], row['DIE_PIN_NAME'])
+            if key not in ground_counts:
+                ground_counts[key] = []
+            ground_counts[key].append(row)
+
+        # Draw ground symbols for each unique (die_num, die_pin_name)
+        for (die_num, pin_name), rows in ground_counts.items():
+            count = len(rows)
+            apr_pin = apr_coords.get(die_num)
+            if not apr_pin:
+                continue
+
+            pt = apr_pin['pt']
+            side = apr_pin['side']
+
+            for i in range(count):
+                self._draw_ground_symbol(c, pt[0], pt[1], side, count, i)
+
+            self.logger.info(f"  Downbound GND: die={die_num}, pin={pin_name}, count={count}")
+
         self._draw_center_info(c, cx, cy, edge_apr, l_cnt, b_cnt, r_cnt, t_cnt, apr_data_by_side)
         c.save()
 
@@ -1007,6 +1048,64 @@ class PDFGen:
             # Extended: width scaled to 80%, height=box_thickness, top at y, extending downward
             width = box_len * 0.8
             c.rect(x - width/2, y - box_thickness, width, box_thickness, fill=0, stroke=1)
+
+    def _draw_ground_symbol(self, c, x, y, side, count, idx):
+        """Draw ground symbol (short wire + GND symbol) extending outward from APR pin.
+
+        Args:
+            c: PDF canvas
+            x, y: Starting point (APR pin coordinate)
+            side: Which side (L/B/R/T) to determine direction
+            count: Total number of ground wires for this pin
+            idx: Which wire (0-based) for offset calculation
+        """
+        from collections import Counter
+
+        # Calculate offset for multiple ground wires (centered)
+        offset = (idx - (count - 1) / 2) * 4
+
+        # Short wire length extending outward
+        short_len = 12
+
+        c.setStrokeColor(colors.blue)
+        c.setLineWidth(1.0)
+
+        if side == 'L':
+            # Extend leftward from APR pin
+            wire_end_x, wire_end_y = x - short_len, y + offset
+            c.line(x, y, wire_end_x, wire_end_y)
+            # Ground symbol at wire end (inverted T pointing left): vertical + 3 horizontal lines
+            c.line(wire_end_x, wire_end_y, wire_end_x - 6, wire_end_y)  # vertical
+            c.line(wire_end_x - 5, wire_end_y, wire_end_x - 5, wire_end_y - 3)  # bottom
+            c.line(wire_end_x - 5, wire_end_y - 1, wire_end_x - 5, wire_end_y - 4)
+            c.line(wire_end_x - 5, wire_end_y - 2, wire_end_x - 5, wire_end_y - 5)
+        elif side == 'R':
+            # Extend rightward from APR pin
+            wire_end_x, wire_end_y = x + short_len, y + offset
+            c.line(x, y, wire_end_x, wire_end_y)
+            # Ground symbol (inverted T pointing right)
+            c.line(wire_end_x, wire_end_y, wire_end_x + 6, wire_end_y)
+            c.line(wire_end_x + 5, wire_end_y, wire_end_x + 5, wire_end_y - 3)
+            c.line(wire_end_x + 5, wire_end_y - 1, wire_end_x + 5, wire_end_y - 4)
+            c.line(wire_end_x + 5, wire_end_y - 2, wire_end_x + 5, wire_end_y - 5)
+        elif side == 'B':
+            # Extend downward from APR pin
+            wire_end_x, wire_end_y = x + offset, y - short_len
+            c.line(x, y, wire_end_x, wire_end_y)
+            # Ground symbol pointing downward (T shape)
+            c.line(wire_end_x, wire_end_y, wire_end_x, wire_end_y - 6)
+            c.line(wire_end_x, wire_end_y - 5, wire_end_x - 3, wire_end_y - 5)
+            c.line(wire_end_x, wire_end_y - 4, wire_end_x - 2, wire_end_y - 4)
+            c.line(wire_end_x, wire_end_y - 3, wire_end_x - 1, wire_end_y - 3)
+        elif side == 'T':
+            # Extend upward from APR pin
+            wire_end_x, wire_end_y = x + offset, y + short_len
+            c.line(x, y, wire_end_x, wire_end_y)
+            # Ground symbol pointing upward (inverted T)
+            c.line(wire_end_x, wire_end_y, wire_end_x, wire_end_y + 6)
+            c.line(wire_end_x, wire_end_y + 5, wire_end_x - 3, wire_end_y + 5)
+            c.line(wire_end_x, wire_end_y + 4, wire_end_x - 2, wire_end_y + 4)
+            c.line(wire_end_x, wire_end_y + 3, wire_end_x - 1, wire_end_y + 3)
 
     def _draw_header(self, c, title, width, height):
         c.setLineWidth(1); c.setStrokeColor(colors.black); c.rect(50, height - 85, width - 100, 65)
