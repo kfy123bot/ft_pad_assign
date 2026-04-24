@@ -55,6 +55,21 @@ class Logger:
             with open(self.log_fn, 'a') as f: f.write(out + "\n")
         sys.exit(1)
 
+# --- Field Alias Mapping (Header-Driven Parsing) ---
+FIELD_ALIASES = {
+    'PKG_NUM':      ['PKG_NUM', 'PIN_NUM'],
+    'PKG_PIN_NAME': ['PKG_PIN_NAME'],
+    'DIE_NUM':      ['DIE_NUM', 'DIE_PAD_NUM'],
+    'DIE_PIN_NAME': ['DIE_PIN_NAME', 'PIN_NAME'],
+    'IO_CELL_NAME': ['IO_CELL_NAME'],
+    'PKG_LOC':      ['PKG_LOC', 'LOCATION', 'PIN_LOCA'],
+    'DIE_LOC':      ['DIE_LOC', 'DIE_PAD_NUM_LOC', 'DIE_LOCA'],
+    'DIRECTION':    ['DIRECTION'],
+    'LOAD':         ['LOAD'],
+    'SLEW':         ['SLEW'],
+    'SSO':          ['SSO'],
+}
+
 # --- Parser Class ---
 class Parser:
     def __init__(self, logger, list_file, v_files=None):
@@ -106,37 +121,69 @@ class Parser:
                     value = match.group(2).strip().rstrip(',')
                     self.header[match.group(1).upper()] = value
                 data_start = i + 1
-            elif stripped.startswith('PKG_NUM') or stripped.startswith('PIN_NUM'):
-                # CSV header row
-                self.raw_headers = stripped.split(',')
-                header_idx = i
-                data_start = i + 1
-                break
+            else:
+                # Alias-aware header detection: check if any PKG_NUM alias appears in the header
+                words = set(w.upper() for w in stripped.split(','))
+                if any(a.upper() in words for a in FIELD_ALIASES['PKG_NUM']):
+                    # CSV header row
+                    self.raw_headers = stripped.split(',')
+                    header_idx = i
+                    data_start = i + 1
+                    break
 
         # Parse CSV data - include header row for DictReader
         csv_content = ''.join(lines[header_idx:])
         reader = csv.DictReader(io.StringIO(csv_content))
         for row in reader:
-            values = list(row.values())
-            cols = [v.strip() if v and v.strip() != '' else '' for v in values]
+            # Build normalized key map (strip + uppercase all header names)
+            norm_row = {k.strip().upper(): (v.strip() if v else '') for k, v in row.items()}
+
+            def get_field(canonical):
+                for alias in FIELD_ALIASES[canonical]:
+                    val = norm_row.get(alias.upper())
+                    if val is not None:
+                        return val if val != '' else '-'
+                return '-'
+
+            # Skip Inner_bound rows - treat as comment, output as-is
+            pkg_num_val = get_field('PKG_NUM')
+            if pkg_num_val.upper() == 'INNER_BOUND':
+                row_data = {
+                    'PKG_NUM':      pkg_num_val,
+                    'PKG_PIN_NAME': get_field('PKG_PIN_NAME'),
+                    'DIE_NUM':      get_field('DIE_NUM'),
+                    'DIE_PIN_NAME': get_field('DIE_PIN_NAME'),
+                    'IO_CELL_NAME': get_field('IO_CELL_NAME'),
+                    'PKG_LOC':      get_field('PKG_LOC'),
+                    'DIE_LOC':      get_field('DIE_LOC'),
+                    'DIRECTION':    get_field('DIRECTION'),
+                    'LOAD':         get_field('LOAD'),
+                    'SLEW':         get_field('SLEW'),
+                    'SSO':          get_field('SSO'),
+                    'INST_NAME':    '-'
+                }
+                self.data.append(row_data)
+                continue
 
             row_data = {
-                'PIN_NUM':         cols[0] if len(cols) > 0 else '-',
-                'DIE_PAD_NUM':     cols[1] if len(cols) > 1 else '-',
-                'PIN_NAME':        cols[2] if len(cols) > 2 else '-',
-                'IO_CELL_NAME':    cols[3] if len(cols) > 3 else '-',
-                'LOCATION':        cols[4] if len(cols) > 4 else '-',
-                'DIE_PAD_NUM_LOC': cols[5] if len(cols) > 5 else '-',
-                'DIRECTION':       cols[6] if len(cols) > 6 else '-',
-                'LOAD':            cols[7] if len(cols) > 7 else '-',
-                'SLEW':            cols[8] if len(cols) > 8 else '-',
-                'SSO':             cols[9] if len(cols) > 9 else '-',
-                'INST_NAME':       '-'
+                'PKG_NUM':      get_field('PKG_NUM'),
+                'PKG_PIN_NAME': get_field('PKG_PIN_NAME'),
+                'DIE_NUM':      get_field('DIE_NUM'),
+                'DIE_PIN_NAME': get_field('DIE_PIN_NAME'),
+                'IO_CELL_NAME': get_field('IO_CELL_NAME'),
+                'PKG_LOC':      get_field('PKG_LOC'),
+                'DIE_LOC':      get_field('DIE_LOC'),
+                'DIRECTION':    get_field('DIRECTION'),
+                'LOAD':         get_field('LOAD'),
+                'SLEW':         get_field('SLEW'),
+                'SSO':          get_field('SSO'),
+                'INST_NAME':    '-'
             }
             self.data.append(row_data)
 
     def _parse_txt(self, f):
         in_table = False
+        col_map = {}
         for line in f:
             line = line.strip()
             if not line or re.match(r'^-+$', line): continue
@@ -144,41 +191,77 @@ class Parser:
             if match:
                 self.header[match.group(1).upper()] = match.group(2)
                 continue
-            if (line.startswith('PIN_NUM') and 'DIE_PAD_NUM' in line) or (line.startswith('PKG_NUM') and 'DIE_NUM' in line):
+            # Alias-aware header detection: check if any PKG_NUM alias appears in the header
+            words = set(line.upper().split())
+            if any(a.upper() in words for a in FIELD_ALIASES['PKG_NUM']):
                 in_table = True
                 self.raw_headers = line.split()
+                col_map = {name.upper(): i for i, name in enumerate(self.raw_headers)}
                 continue
             if in_table:
                 cols = line.split()
                 if len(cols) >= 5:
+                    def get_txt_field(canonical):
+                        for alias in FIELD_ALIASES[canonical]:
+                            idx = col_map.get(alias.upper())
+                            if idx is not None and idx < len(cols):
+                                v = cols[idx]
+                                return v if v.strip() else '-'
+                        return '-'
+
+                    # Skip Inner_bound rows - treat as comment, output as-is
+                    pkg_num_val = get_txt_field('PKG_NUM')
+                    if pkg_num_val.upper() == 'INNER_BOUND':
+                        row = {
+                            'PKG_NUM':      pkg_num_val,
+                            'PKG_PIN_NAME': get_txt_field('PKG_PIN_NAME'),
+                            'DIE_NUM':      get_txt_field('DIE_NUM'),
+                            'DIE_PIN_NAME': get_txt_field('DIE_PIN_NAME'),
+                            'IO_CELL_NAME': get_txt_field('IO_CELL_NAME'),
+                            'PKG_LOC':      get_txt_field('PKG_LOC'),
+                            'DIE_LOC':      get_txt_field('DIE_LOC'),
+                            'DIRECTION':    get_txt_field('DIRECTION'),
+                            'LOAD':         get_txt_field('LOAD'),
+                            'SLEW':         get_txt_field('SLEW'),
+                            'SSO':          get_txt_field('SSO'),
+                            'INST_NAME':    '-'
+                        }
+                        self.data.append(row)
+                        continue
+
                     row = {
-                        'PIN_NUM':          cols[0],
-                        'DIE_PAD_NUM':      cols[1],
-                        'PIN_NAME':         cols[2],
-                        'IO_CELL_NAME':     cols[3],
-                        'LOCATION':         cols[4],
-                        'DIE_PAD_NUM_LOC':  cols[5] if len(cols) > 5 else cols[4],
-                        'DIRECTION':        cols[6] if len(cols) > 6 else '-',
-                        'LOAD':             cols[7] if len(cols) > 7 else '-',
-                        'SLEW':             cols[8] if len(cols) > 8 else '-',
-                        'SSO':              cols[9] if len(cols) > 9 else '-',
+                        'PKG_NUM':      get_txt_field('PKG_NUM'),
+                        'PKG_PIN_NAME': get_txt_field('PKG_PIN_NAME'),
+                        'DIE_NUM':      get_txt_field('DIE_NUM'),
+                        'DIE_PIN_NAME': get_txt_field('DIE_PIN_NAME'),
+                        'IO_CELL_NAME': get_txt_field('IO_CELL_NAME'),
+                        'PKG_LOC':      get_txt_field('PKG_LOC'),
+                        'DIE_LOC':      get_txt_field('DIE_LOC'),
+                        'DIRECTION':    get_txt_field('DIRECTION'),
+                        'LOAD':         get_txt_field('LOAD'),
+                        'SLEW':         get_txt_field('SLEW'),
+                        'SSO':          get_txt_field('SSO'),
                         'INST_NAME':    '-'
                     }
                     self.data.append(row)
 
     def _reorder_and_reindex_apr_data(self):
-        self.logger.info("Re-indexing DIE_PAD_NUM with Dynamic D1.xx Reference Update...")
+        self.logger.info("Re-indexing DIE_NUM with Dynamic D1.xx Reference Update...")
         
         # 1. Capture original mapping and identify D1.xx references
         old_die_num_to_row = {}
         referencing_rows = [] # Rows with PKG_NUM like D1.77
-        
+
         for row in self.data:
-            d_num = row['DIE_PAD_NUM']
-            p_num = row['PIN_NUM']
+            # Skip special rows - treat as comment, output as-is
+            pkg_upper = row['PKG_NUM'].upper()
+            if pkg_upper == 'INNER_BOUND' or row['PKG_NUM'] == '-' or row['DIE_NUM'] == '-':
+                continue
+            d_num = row['DIE_NUM']
+            p_num = row['PKG_NUM']
             if d_num not in ('0', '-', ''):
                 old_die_num_to_row[d_num] = row
-            
+
             # Check for D1.xx pattern in PKG_NUM
             match = re.search(r'D1\.(\d+)', p_num.upper())
             if match:
@@ -187,29 +270,43 @@ class Parser:
         # 2. Re-indexing logic (First L is 1, keep 0 as 0)
         start_idx = -1
         for i, row in enumerate(self.data):
-            if row['DIE_PAD_NUM_LOC'].upper() == 'L' and row['PIN_NAME'].upper() != 'NC' and row['DIE_PAD_NUM'] != '0':
+            # Skip special rows
+            if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['PKG_NUM'] == '-' or row['DIE_NUM'] == '-':
+                continue
+            if row['DIE_LOC'].upper() == 'L' and row['DIE_PIN_NAME'].upper() != 'NC' and row['DIE_NUM'] != '0':
                 start_idx = i
                 break
-        
+
         if start_idx != -1:
             ring_seq = self.data[start_idx:] + self.data[:start_idx]
             idx = 1
+            orig_to_new = {}  # Map: original DIE_NUM -> new DIE_NUM (for duplicates)
             for row in ring_seq:
-                if row['PIN_NAME'].upper() == 'NC' or row['DIE_PAD_NUM'] == '0':
-                    row['DIE_PAD_NUM'] = '0'
+                # Skip special rows
+                if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['PKG_NUM'] == '-' or row['DIE_NUM'] == '-':
+                    continue
+                if row['DIE_PIN_NAME'].upper() == 'NC' or row['DIE_NUM'] == '0':
+                    row['DIE_NUM'] = '0'
                 else:
-                    row['DIE_PAD_NUM'] = str(idx)
-                    idx += 1
+                    orig_die = row['DIE_NUM']
+                    if orig_die in orig_to_new:
+                        # Duplicate DIE_NUM: reuse the same new number
+                        row['DIE_NUM'] = orig_to_new[orig_die]
+                    else:
+                        # New DIE_NUM: assign new number
+                        row['DIE_NUM'] = str(idx)
+                        orig_to_new[orig_die] = str(idx)
+                        idx += 1
 
         # 3. Dynamic Update for D1.xx
         for ref_row, target_xx in referencing_rows:
             if target_xx in old_die_num_to_row:
                 target_row_obj = old_die_num_to_row[target_xx]
-                new_val = target_row_obj['DIE_PAD_NUM']
+                new_val = target_row_obj['DIE_NUM']
                 # Update PKG_NUM to new reference (preserving parentheses if any)
-                orig_pnum = ref_row['PIN_NUM']
+                orig_pnum = ref_row['PKG_NUM']
                 new_pnum = re.sub(r'D1\.\d+', f'D1.{new_val}', orig_pnum, flags=re.I)
-                ref_row['PIN_NUM'] = new_pnum
+                ref_row['PKG_NUM'] = new_pnum
                 self.logger.info(f"Updated Dynamic Reference: {orig_pnum} -> {new_pnum} (Target was DIE_NUM {target_xx})")
 
     def _sanity_check_list(self):
@@ -247,9 +344,9 @@ class Parser:
         actual_pnums = {'L': set(), 'B': set(), 'R': set(), 'T': set()}
 
         for row in self.data:
-            loc = row['LOCATION'].upper()
-            pnum = row['PIN_NUM']
-            pname = row['PIN_NAME'].upper()
+            loc = row['PKG_LOC'].upper()
+            pnum = row['PKG_NUM']
+            pname = row['DIE_PIN_NAME'].upper()
 
             # Count every unique physical pin number (including NC)
             # 1. Ignore '0', '-', or empty which are not physical pin slots
@@ -323,14 +420,17 @@ class Parser:
                 self.logger.warn(f"Error parsing Verilog {v_file}: {e}")
 
     def bridge_data(self):
-        self.logger.info("Bridging data and re-indexing DIE_PAD_NUM with Dynamic Reference Update...")
+        self.logger.info("Bridging data and re-indexing DIE_NUM with Dynamic Reference Update...")
         
         # 1. Capture original mapping and identify D1.xx references
         old_die_num_to_row = {}
         referencing_rows = []
         for row in self.data:
-            d_num = row['DIE_PAD_NUM']
-            p_num = row['PIN_NUM']
+            # Skip special rows - treat as comment, output as-is
+            if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['PKG_NUM'] == '-' or row['DIE_NUM'] == '-':
+                continue
+            d_num = row['DIE_NUM']
+            p_num = row['PKG_NUM']
             if d_num not in ('0', '-', ''):
                 old_die_num_to_row[d_num] = row
             match = re.search(r'D1\.(\d+)', p_num.upper())
@@ -340,33 +440,47 @@ class Parser:
         # 2. Re-indexing logic
         start_idx = -1
         for i, row in enumerate(self.data):
-            if row['DIE_PAD_NUM_LOC'].upper() == 'L' and row['PIN_NAME'].upper() != 'NC' and row['DIE_PAD_NUM'] != '0':
+            # Skip special rows
+            if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['PKG_NUM'] == '-' or row['DIE_NUM'] == '-':
+                continue
+            if row['DIE_LOC'].upper() == 'L' and row['DIE_PIN_NAME'].upper() != 'NC' and row['DIE_NUM'] != '0':
                 start_idx = i
                 break
-        
+
         if start_idx != -1:
             ring_seq = self.data[start_idx:] + self.data[:start_idx]
             idx = 1
+            orig_to_new = {}  # Map: original DIE_NUM -> new DIE_NUM (for duplicates)
             for row in ring_seq:
-                if row['PIN_NAME'].upper() == 'NC' or row['DIE_PAD_NUM'] == '0':
-                    row['DIE_PAD_NUM'] = '0'
+                # Skip special rows
+                if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['PKG_NUM'] == '-' or row['DIE_NUM'] == '-':
+                    continue
+                if row['DIE_PIN_NAME'].upper() == 'NC' or row['DIE_NUM'] == '0':
+                    row['DIE_NUM'] = '0'
                 else:
-                    row['DIE_PAD_NUM'] = str(idx)
-                    idx += 1
+                    orig_die = row['DIE_NUM']
+                    if orig_die in orig_to_new:
+                        # Duplicate DIE_NUM: reuse the same new number
+                        row['DIE_NUM'] = orig_to_new[orig_die]
+                    else:
+                        # New DIE_NUM: assign new number
+                        row['DIE_NUM'] = str(idx)
+                        orig_to_new[orig_die] = str(idx)
+                        idx += 1
 
         # 3. Dynamic Update for D1.xx
         for ref_row, target_xx in referencing_rows:
             if target_xx in old_die_num_to_row:
                 target_row_obj = old_die_num_to_row[target_xx]
-                new_val = target_row_obj['DIE_PAD_NUM']
-                orig_pnum = ref_row['PIN_NUM']
+                new_val = target_row_obj['DIE_NUM']
+                orig_pnum = ref_row['PKG_NUM']
                 new_pnum = re.sub(r'D1\.\d+', f'D1.{new_val}', orig_pnum, flags=re.I)
-                ref_row['PIN_NUM'] = new_pnum
+                ref_row['PKG_NUM'] = new_pnum
                 self.logger.info(f"Updated Dynamic Reference (Bridge): {orig_pnum} -> {new_pnum}")
 
         # --- Bridging Logic ---
         for row in self.data:
-            pname = row['PIN_NAME']
+            pname = row['DIE_PIN_NAME']
             pname_upper = pname.upper()
             if pname_upper == 'NC': continue
             
@@ -413,15 +527,16 @@ class PDFGen:
         apr_t_early = []
         apr_found_l = False
         seen_pnums = set()
+        seen_apr_die_nums = set()  # For APR deduplication: skip duplicate DIE_NUM
         # Collect D1.xx rows for inner bound connections
         d1xx_rows = []
-        
+
         for row in self.parser.data:
-            p_loc = row['LOCATION'].upper()
-            a_loc = row['DIE_PAD_NUM_LOC'].upper()
-            pnum = row['PIN_NUM']
-            pname = row['PIN_NAME'].upper()
-            
+            p_loc = row['PKG_LOC'].upper()
+            a_loc = row['DIE_LOC'].upper()
+            pnum = row['PKG_NUM']
+            pname = row['DIE_PIN_NAME'].upper()
+
             # PKG side (Uses current PIN_NUM order)
             # DOWNBOUND should be included in PKG (even though DIE_NUM=0)
             if p_loc in pkg_data_by_side:
@@ -433,13 +548,22 @@ class PDFGen:
 
             # APR side (Needs local reordering for the Ring)
             # Skip NC, DOWNBOUND, and DIE_PAD_NUM='0' or '-' (no die pad)
-            if pname not in ('NC', 'DOWNBOUND') and row['DIE_PAD_NUM'] not in ('0', '-') and a_loc in apr_data_by_side:
-                if a_loc == 'L': apr_found_l = True
-
-                if a_loc == 'T' and not apr_found_l:
-                    apr_t_early.append(row)
+            # Skip Inner_bound and PKG_NUM='-'
+            # Skip duplicate DIE_NUM (only show one APR pin for multiple wires to same point)
+            die_num = row['DIE_NUM']
+            if pname not in ('NC', 'DOWNBOUND') and die_num not in ('0', '-') and a_loc in apr_data_by_side:
+                if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['PKG_NUM'] == '-':
+                    pass  # Skip
+                elif die_num in seen_apr_die_nums:
+                    pass  # Skip duplicate
                 else:
-                    apr_data_by_side[a_loc].append(row)
+                    seen_apr_die_nums.add(die_num)
+                    if a_loc == 'L': apr_found_l = True
+
+                    if a_loc == 'T' and not apr_found_l:
+                        apr_t_early.append(row)
+                    else:
+                        apr_data_by_side[a_loc].append(row)
 
             # Collect D1.xx rows for inner bound connections (both D1.xx and (D1.xx) formats)
             if pnum.startswith('D1.') or pnum.startswith('(D1.'):
@@ -463,14 +587,14 @@ class PDFGen:
 
         c.setLineWidth(0.3)
         for row in self.parser.data:
-            pname = row['PIN_NAME'].upper()
+            pname = row['DIE_PIN_NAME'].upper()
             # Skip NC, DOWNBOUND, and DIE_PAD_NUM='0' for bonding wires (no APR pin exists)
-            if pname in ('NC', 'DOWNBOUND') or row['DIE_PAD_NUM'] in ('0', '-'): continue
-            p_pt = pkg_coords.get(row['PIN_NUM'])
-            a_pt = apr_coords.get(row['DIE_PAD_NUM'])
+            if pname in ('NC', 'DOWNBOUND') or row['DIE_NUM'] in ('0', '-'): continue
+            p_pt = pkg_coords.get(row['PKG_NUM'])
+            a_pt = apr_coords.get(row['DIE_NUM'])
             if p_pt and a_pt:
                 # Determine which side based on PIN_NUM location
-                pnum_str = row['PIN_NUM']
+                pnum_str = row['PKG_NUM']
                 side = None
                 try:
                     pnum_int = int(pnum_str)
@@ -508,38 +632,43 @@ class PDFGen:
                 c.setStrokeColor(dir_color); c.line(wire_start[0], wire_start[1], wire_end[0], wire_end[1])
 
         # Draw inner bound red lines for D1.xx connections
-        # D1.xx yy → from DIE_PAD_NUM=xx to DIE_PAD_NUM=yy
-        # (D1.xx) yy → from DIE_PAD_NUM=yy to DIE_PAD_NUM=xx
-        # APR pin shape extends toward chip center, wire connects to extended endpoint
+        # Rule: PKG_NUM=D1.xx + DIE_NUM=yy means xx -> yy (regardless of parentheses)
+        # Symmetric pair: D1.90+DIE_NUM=1 AND D1.1+DIE_NUM=90 means 90<->1 connected both ways
+        # Asymmetric: only one direction exists = ERROR + dashed line
         if d1xx_rows:
-            self.logger.info(f"Inner Bound connections: {len(d1xx_rows)} wires")
-            box_thickness = max(1, min(edge_apr * 0.8 / max(l_cnt, b_cnt, r_cnt, t_cnt), 6))
-
+            # First pass: build (source, dest) pairs
+            # D1.xx + DIE_NUM=yy -> source=xx, dest=yy
+            direction_map = {}  # (source, dest) -> list of rows
             for row in d1xx_rows:
-                pnum = row['PIN_NUM']
-                die_yy = row['DIE_PAD_NUM']
-
-                # Skip if yy is invalid
+                pnum = row['PKG_NUM']
+                die_yy = row['DIE_NUM']
                 if not die_yy or die_yy in ('0', '-'):
                     continue
+                # Remove parentheses if present, extract xx
+                pnum_clean = pnum.lstrip('(').rstrip(')')
+                xx = pnum_clean.split('.')[1].rstrip(')')
+                # D1.xx, DIE_NUM=yy means xx -> yy (both with and without parentheses)
+                source, dest = xx, die_yy
+                key = (source, dest)
+                if key not in direction_map:
+                    direction_map[key] = []
+                direction_map[key].append(row)
 
-                # Extract xx from PIN_NUM=D1.xx
-                xx = pnum.split('.')[1].rstrip(')')
+            # Check for asymmetric connections
+            asymmetric_pairs = []
+            for (a, b), rows in direction_map.items():
+                reverse_key = (b, a)
+                if reverse_key not in direction_map:
+                    # Asymmetric: a->b exists but b->a missing
+                    asymmetric_pairs.append((a, b))
+                    self.logger.error(f"Inner Bound ASYMMETRIC: {a}->{b} exists but {b}->{a} missing!")
 
-                # Determine source and dest based on parentheses
-                if pnum.startswith('('):
-                    # (D1.xx) yy → yy -> xx
-                    source, dest = die_yy, xx
-                else:
-                    # D1.xx yy → xx -> yy
-                    source, dest = xx, die_yy
+            drawn_extended_pins = set()
 
-                self.logger.info(f"  Wire: {source} -> {dest}")
-
+            for (source, dest), rows in direction_map.items():
                 pin_src = apr_coords.get(source)
                 pin_dst = apr_coords.get(dest)
                 if not pin_src or not pin_dst:
-                    self.logger.warn(f"  Skipping {source}->{dest}: missing coordinate")
                     continue
 
                 pt_src = pin_src['pt']
@@ -551,15 +680,13 @@ class PDFGen:
                 side_src = pin_src['side']
                 side_dst = pin_dst['side']
 
-                # Find directions for source and dest
                 dir_src = dir_dst = None
                 for r in self.parser.data:
-                    if r['DIE_PAD_NUM'] == source:
+                    if r['DIE_NUM'] == source:
                         dir_src = r['DIRECTION']
-                    if r['DIE_PAD_NUM'] == dest:
+                    if r['DIE_NUM'] == dest:
                         dir_dst = r['DIRECTION']
 
-                # Determine colors based on direction
                 def get_pin_color(direction):
                     if direction == 'P': return colors.red
                     elif direction == 'G': return colors.blue
@@ -568,19 +695,52 @@ class PDFGen:
                 color_src = get_pin_color(dir_src) if dir_src else colors.black
                 color_dst = get_pin_color(dir_dst) if dir_dst else colors.black
 
-                # Calculate extended pin positions
                 ext_src = self._extend_point_toward_center(pt_src, side_src, bh_src, cx, cy)
                 ext_dst = self._extend_point_toward_center(pt_dst, side_dst, bh_dst, cx, cy)
 
-                # Draw extended pin shapes with correct colors and dimensions
-                c.setStrokeColor(colors.red); c.setLineWidth(0.5)
-                self._draw_extended_pin(c, pt_src, side_src, bw_src, bh_src, color_src)
-                self._draw_extended_pin(c, pt_dst, side_dst, bw_dst, bh_dst, color_dst)
+                # Draw extended pin shapes only once per unique pin
+                if (source, side_src) not in drawn_extended_pins:
+                    c.setStrokeColor(colors.red); c.setLineWidth(0.5)
+                    self._draw_extended_pin(c, pt_src, side_src, bw_src, bh_src, color_src)
+                    drawn_extended_pins.add((source, side_src))
+                if (dest, side_dst) not in drawn_extended_pins:
+                    c.setStrokeColor(colors.red); c.setLineWidth(0.5)
+                    self._draw_extended_pin(c, pt_dst, side_dst, bw_dst, bh_dst, color_dst)
+                    drawn_extended_pins.add((dest, side_dst))
 
-                # Draw inner bound red line connecting the extended endpoints
-                c.setStrokeColor(colors.red)
-                c.line(ext_src[0], ext_src[1], ext_dst[0], ext_dst[1])
-                self.logger.info(f"  Drew: {source}({side_src},{dir_src}) -> {dest}({side_dst},{dir_dst})")
+                # Determine if symmetric or asymmetric
+                reverse_key = (dest, source)
+                is_symmetric = reverse_key in direction_map
+                count = len(rows)
+
+                # Draw count offset wires
+                for i in range(count):
+                    offset = (i - (count - 1) / 2) * 2
+
+                    # Apply offset based on side
+                    if side_src in ('L', 'R'):
+                        # Y axis offset (spread vertically)
+                        src_x, src_y = ext_src[0], ext_src[1] + offset
+                        dst_x, dst_y = ext_dst[0], ext_dst[1] + offset
+                    else:  # B/T
+                        # X axis offset (spread horizontally)
+                        src_x, src_y = ext_src[0] + offset, ext_src[1]
+                        dst_x, dst_y = ext_dst[0] + offset, ext_dst[1]
+
+                    if is_symmetric:
+                        c.setStrokeColor(colors.red)
+                        c.setLineWidth(1.0)
+                        c.line(src_x, src_y, dst_x, dst_y)
+                        if count == 1:
+                            self.logger.info(f"  Symmetric pair: {source} <-> {dest}, drew SOLID line")
+                    else:
+                        c.setStrokeColor(colors.red)
+                        c.setLineWidth(1.0)
+                        c.setDash([4, 2])
+                        c.line(src_x, src_y, dst_x, dst_y)
+                        c.setDash([])
+                        if i == 0:
+                            self.logger.error(f"  Asymmetric: {source} -> {dest}, drew DASHED line")
 
         self._draw_center_info(c, cx, cy, edge_apr, l_cnt, b_cnt, r_cnt, t_cnt, apr_data_by_side)
         c.save()
@@ -595,14 +755,22 @@ class PDFGen:
         data_by_side = {'L': [], 'B': [], 'R': [], 'T': []}
         t_early = []
         found_l = False
+        seen_die_nums = set()  # For deduplication: skip duplicate DIE_NUM
         for row in self.parser.data:
-            pname = row['PIN_NAME'].upper()
+            pname = row['DIE_PIN_NAME'].upper()
             # Skip NC, DOWNBOUND, and DIE_PAD_NUM='0' for APR (no die pad to show)
-            if pname in ('NC', 'DOWNBOUND') or row['DIE_PAD_NUM'] in ('0', '-'): continue
-            loc = row['DIE_PAD_NUM_LOC'].upper()
+            if pname in ('NC', 'DOWNBOUND') or row['DIE_NUM'] in ('0', '-'): continue
+            # Skip Inner_bound and PKG_NUM='-'
+            if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['PKG_NUM'] == '-': continue
+            # Skip duplicate DIE_NUM (only show one APR pin for multiple wires to same point)
+            die_num = row['DIE_NUM']
+            if die_num in seen_die_nums:
+                continue
+            seen_die_nums.add(die_num)
+            loc = row['DIE_LOC'].upper()
             if loc in data_by_side:
                 if loc == 'L': found_l = True
-                
+
                 if loc == 'T' and not found_l:
                     t_early.append(row)
                 else:
@@ -631,8 +799,8 @@ class PDFGen:
         c.setLineWidth(2); c.rect(cx - edge/2, cy - edge/2, edge, edge)
         pkg_data = {}; order = []
         for row in self.parser.data:
-            pnum = row['PIN_NUM']
-            pname = row['PIN_NAME'].upper()
+            pnum = row['PKG_NUM']
+            pname = row['DIE_PIN_NAME'].upper()
             # Skip: POWERCUT, but NOT NC (NC should show on PKG) and NOT DOWNBOUND
             if 'POWERCUT' in pname: continue
             if pnum in ('0', '-'): continue
@@ -656,8 +824,8 @@ class PDFGen:
                 return None
 
         for pnum in order:
-            loc = pkg_data[pnum]['LOCATION'].upper()
-            pname = pkg_data[pnum]['PIN_NAME'].upper()
+            loc = pkg_data[pnum]['PKG_LOC'].upper()
+            pname = pkg_data[pnum]['DIE_PIN_NAME'].upper()
             # For DOWNBOUND or pins with invalid LOCATION, infer side from PIN_NUM
             if pname == 'DOWNBOUND' or loc not in data_by_side:
                 inferred_side = get_side_from_pnum(pnum)
@@ -692,21 +860,21 @@ class PDFGen:
         if mode == 'PKG': font_size = min(font_size + 1, 10)
         box_len = 15 if mode == 'APR' else 25
         for idx, pin in enumerate(pins, 1):
-            pname = pin['PIN_NAME']; display_name = pname
+            pname = pin['DIE_PIN_NAME']; display_name = pname
             if '%' in pname: display_name = pname.split('%')[-1] if mode == 'APR' else pname.split('%')[0]
             px, py = 0, 0; bw, bh = 0, 0
             if side == 'L':
                 bw, bh = box_len, box_thickness; px = bx - (0 if label_inside else bw); py = (by + length/2) - (idx * step) - (bh/2)
-                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = {'pt': (bx, py + bh/2), 'bw': bw, 'bh': bh, 'side': side}
+                coords[pin['PKG_NUM'] if mode == 'PKG' else pin['DIE_NUM']] = {'pt': (bx, py + bh/2), 'bw': bw, 'bh': bh, 'side': side}
             elif side == 'B':
                 bw, bh = box_thickness, box_len; px = (bx - length/2) + (idx * step) - (bw/2); py = by - (0 if label_inside else bh)
-                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = {'pt': (px + bw/2, by), 'bw': bw, 'bh': bh, 'side': side}
+                coords[pin['PKG_NUM'] if mode == 'PKG' else pin['DIE_NUM']] = {'pt': (px + bw/2, by), 'bw': bw, 'bh': bh, 'side': side}
             elif side == 'R':
                 bw, bh = box_len, box_thickness; px = bx - (bw if label_inside else 0); py = (by - length/2) + (idx * step) - (bh/2)
-                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = {'pt': (bx, py + bh/2), 'bw': bw, 'bh': bh, 'side': side}
+                coords[pin['PKG_NUM'] if mode == 'PKG' else pin['DIE_NUM']] = {'pt': (bx, py + bh/2), 'bw': bw, 'bh': bh, 'side': side}
             elif side == 'T':
                 bw, bh = box_thickness, box_len; px = (bx + length/2) - (idx * step) - (bw/2); py = by - (bh if label_inside else 0)
-                coords[pin['PIN_NUM'] if mode == 'PKG' else pin['DIE_PAD_NUM']] = {'pt': (px + bw/2, by), 'bw': bw, 'bh': bh, 'side': side}
+                coords[pin['PKG_NUM'] if mode == 'PKG' else pin['DIE_NUM']] = {'pt': (px + bw/2, by), 'bw': bw, 'bh': bh, 'side': side}
             c.setLineWidth(0.5); c.setStrokeColor(colors.black); direction = pin['DIRECTION']
             if 'POWERCUT' in pname.upper(): c.setFillColor(colors.black); c.rect(px, py, bw, bh, fill=1)
             elif pname.upper() == 'NC': c.setFillColor(colors.black); c.rect(px, py, bw, bh, fill=1)
@@ -762,7 +930,7 @@ class PDFGen:
                 c.restoreState()
 
             # --- Pin Numbering (1, 5, 10...) and Start Dot (Pin 1) ---
-            num_str = pin['DIE_PAD_NUM'] if mode == 'APR' else pin['PIN_NUM']
+            num_str = pin['DIE_NUM'] if mode == 'APR' else pin['PKG_NUM']
             try:
                 n_int = int(num_str)
                 # 1. Draw Start Dot (Top-Left marker: always first pin of Side L)
@@ -876,7 +1044,7 @@ class Checker:
                     if row['DIRECTION'] in ('I', 'O', 'B'):
                         io_count += 1
                         if io_count > max_io:
-                            msg = f"[WARN] Consecutive I/O at Pin {row['PIN_NUM']} ({row['PIN_NAME']})"
+                            msg = f"[WARN] Consecutive I/O at Pin {row['PKG_NUM']} ({row['DIE_PIN_NAME']})"
                             f.write(msg + "\n")
                             self.logger.warn(msg)
                     elif row['DIRECTION'] in ('P', 'G'):
@@ -894,20 +1062,20 @@ class Writer:
     def generate_completed_list(self, filename):
         self.logger.info(f"Generating completed list: {filename}")
         try:
-            # Determine headers to use
-            h = getattr(self.parser, 'raw_headers', ['PIN_NUM', 'DIE_PAD_NUM', 'PIN_NAME', 'IO_CELL_NAME', 'LOCATION', 'DIE_PAD_NUM_LOC', 'DIRECTION', 'LOAD', 'SLEW', 'SSO'])
+            # Always use canonical headers (not raw_headers which may contain old field names)
+            h = ['PKG_NUM', 'PKG_PIN_NAME', 'DIE_NUM', 'DIE_PIN_NAME', 'IO_CELL_NAME', 'PKG_LOC', 'DIE_LOC', 'DIRECTION', 'LOAD', 'SLEW', 'SSO']
             
             with open(filename, 'w') as f:
                 for k, v in sorted(self.parser.header.items()):
                     f.write(f"{k:<20} : {v}\n")
                 f.write("\n")
                 
-                # Format header row
-                head_str = f"{h[0]:<8} {h[1]:<12} {h[2]:<20} {h[3]:<12} {h[4]:<10} {h[5]:<18} "
-                if len(h) > 6: head_str += f"{h[6]:<10} "
-                if len(h) > 7: head_str += f"{h[7]:<6} "
+                # Format header row (11 columns: PKG_NUM, PKG_PIN_NAME, DIE_NUM, DIE_PIN_NAME, IO_CELL_NAME, PKG_LOC, DIE_LOC, DIRECTION, LOAD, SLEW, SSO)
+                head_str = f"{h[0]:<8} {h[1]:<12} {h[2]:<12} {h[3]:<20} {h[4]:<12} {h[5]:<10} {h[6]:<18} "
+                if len(h) > 7: head_str += f"{h[7]:<10} "
                 if len(h) > 8: head_str += f"{h[8]:<6} "
                 if len(h) > 9: head_str += f"{h[9]:<6} "
+                if len(h) > 10: head_str += f"{h[10]:<6} "
                 f.write(head_str.rstrip() + "\n")
                 f.write("-" * 120 + "\n")
                 
@@ -915,25 +1083,45 @@ class Writer:
                     return v if v and v.strip() else '-'
 
                 for r in self.parser.data:
-                    row_str = f"{norm(r['PIN_NUM']):<8} {norm(r['DIE_PAD_NUM']):<12} {norm(r['PIN_NAME']):<20} {norm(r['IO_CELL_NAME']):<12} {norm(r['LOCATION']):<10} {norm(r['DIE_PAD_NUM_LOC']):<18} "
-                    if len(h) > 6: row_str += f"{norm(r['DIRECTION']):<10} "
-                    if len(h) > 7: row_str += f"{norm(r['LOAD']):<6} "
-                    if len(h) > 8: row_str += f"{norm(r['SLEW']):<6} "
-                    if len(h) > 9: row_str += f"{norm(r['SSO']):<6} "
+                    row_str = f"{norm(r['PKG_NUM']):<8} {norm(r['PKG_PIN_NAME']):<12} {norm(r['DIE_NUM']):<12} {norm(r['DIE_PIN_NAME']):<20} {norm(r['IO_CELL_NAME']):<12} {norm(r['PKG_LOC']):<10} {norm(r['DIE_LOC']):<18} "
+                    if len(h) > 7: row_str += f"{norm(r['DIRECTION']):<10} "
+                    if len(h) > 8: row_str += f"{norm(r['LOAD']):<6} "
+                    if len(h) > 9: row_str += f"{norm(r['SLEW']):<6} "
+                    if len(h) > 10: row_str += f"{norm(r['SSO']):<6} "
                     f.write(row_str.rstrip() + "\n")
         except Exception as e:
             self.logger.error(f"Error in writer: {e}")
+
+    def generate_completed_csv(self, filename):
+        """Generate CSV format of completed pin list."""
+        self.logger.info(f"Generating completed list (CSV): {filename}")
+        try:
+            h = ['PKG_NUM', 'PKG_PIN_NAME', 'DIE_NUM', 'DIE_PIN_NAME',
+                 'IO_CELL_NAME', 'PKG_LOC', 'DIE_LOC', 'DIRECTION', 'LOAD', 'SLEW', 'SSO']
+
+            with open(filename, 'w', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=h)
+                writer.writeheader()
+
+                def norm(v):
+                    return v if v and v.strip() else '-'
+
+                for r in self.parser.data:
+                    row = {field: norm(r[field]) for field in h}
+                    writer.writerow(row)
+        except Exception as e:
+            self.logger.error(f"Error in CSV writer: {e}")
 
     def generate_innovus_io(self, filename):
         self.logger.info(f"Generating Innovus IO Constraint: {filename}")
         try:
             # Sort data by DIE_PAD_NUM for correct ring sequence in constraints
-            sorted_data = sorted([r for r in self.parser.data if r['PIN_NAME'].upper() != 'NC' and r['DIE_PAD_NUM'] != '0'], 
-                                 key=lambda x: int(x['DIE_PAD_NUM']))
+            sorted_data = sorted([r for r in self.parser.data if r['DIE_PIN_NAME'].upper() != 'NC' and r['DIE_NUM'] != '0'], 
+                                 key=lambda x: int(x['DIE_NUM']))
             
             sides = {'L': [], 'B': [], 'R': [], 'T': []}
             for row in sorted_data:
-                loc = row['DIE_PAD_NUM_LOC'].upper()
+                loc = row['DIE_LOC'].upper()
                 if loc in sides: sides[loc].append(row['INST_NAME'])
             
             with open(filename, 'w') as f:
@@ -955,12 +1143,12 @@ class Writer:
         self.logger.info(f"Generating ICC2 IO Constraint: {filename}")
         try:
             # Sort data by DIE_PAD_NUM for correct ring sequence
-            sorted_data = sorted([r for r in self.parser.data if r['PIN_NAME'].upper() != 'NC' and r['DIE_PAD_NUM'] != '0'], 
-                                 key=lambda x: int(x['DIE_PAD_NUM']))
+            sorted_data = sorted([r for r in self.parser.data if r['DIE_PIN_NAME'].upper() != 'NC' and r['DIE_NUM'] != '0'], 
+                                 key=lambda x: int(x['DIE_NUM']))
             
             sides = {'L': [], 'B': [], 'R': [], 'T': []}
             for row in sorted_data:
-                loc = row['DIE_PAD_NUM_LOC'].upper()
+                loc = row['DIE_LOC'].upper()
                 if loc in sides: sides[loc].append(row['INST_NAME'])
                 
             with open(filename, 'w') as f:
@@ -1042,6 +1230,7 @@ def main():
     if args.c:
         w = Writer(logger, parser)
         w.generate_completed_list(f"{prefix}.new")
+        w.generate_completed_csv(f"{prefix}.new.csv")
         w.generate_innovus_io(f"{prefix}_chip.inn.const")
         w.generate_icc2_io(f"{prefix}_chip.icc2.const")
 
