@@ -579,10 +579,12 @@ class PDFGen:
 
         pkg_coords, apr_coords = {}, {}
         pkg_edge = {'L': cx - edge_pkg/2, 'R': cx + edge_pkg/2, 'B': cy - edge_pkg/2, 'T': cy + edge_pkg/2}
+        page_lim = {'L': 30, 'R': width - 30, 'B': 30, 'T': 510}
+
         for side in ('L', 'B', 'R', 'T'):
-            p_coords = self._draw_side_boxes(c, side, pkg_data_by_side[side], cx, cy, edge_pkg, getattr(self, f"_{side}_pos")(cx, cy, edge_pkg), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'PKG', label_inside=False)
+            p_coords = self._draw_side_boxes(c, side, pkg_data_by_side[side], cx, cy, edge_pkg, getattr(self, f"_{side}_pos")(cx, cy, edge_pkg), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'PKG', label_inside=False, max_label_extent=page_lim[side])
             pkg_coords.update(p_coords)
-            a_coords = self._draw_side_boxes(c, side, apr_data_by_side[side], cx, cy, edge_apr, getattr(self, f"_{side}_pos")(cx, cy, edge_apr), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'APR', label_inside=False, max_label_extent=pkg_edge[side])
+            a_coords = self._draw_side_boxes(c, side, apr_data_by_side[side], cx, cy, edge_apr, getattr(self, f"_{side}_pos")(cx, cy, edge_apr), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'APR', label_inside=False, max_label_extent=pkg_edge['B'] if side == 'B' else pkg_edge[side])
             apr_coords.update(a_coords)
 
         c.setLineWidth(0.3)
@@ -828,7 +830,7 @@ class PDFGen:
         for side in ('L', 'B', 'R', 'T'):
             limit = apr_edge[side]
             if side == 'T': limit = header_bottom
-            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), max_cnt, 'APR', label_inside=False, max_label_extent=limit)
+            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), max_cnt, 'APR', label_inside=False, max_label_extent=limit, allow_overflow=True)
         c.save()
 
     def generate_pkg_pdf(self, filename):
@@ -885,7 +887,7 @@ class PDFGen:
         for side in ('L', 'B', 'R', 'T'):
             limit = pkg_edge[side]
             if side == 'T': limit = header_bottom
-            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), max_cnt, 'PKG', label_inside=False, max_label_extent=limit)
+            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), max_cnt, 'PKG', label_inside=False, max_label_extent=limit, allow_overflow=True)
         c.save()
 
     def _L_pos(self, cx, cy, edge): return (cx - edge/2, cy)
@@ -945,8 +947,10 @@ class PDFGen:
                     if label_end > limit:
                         truncate = True
                 elif side == 'B':
-                    label_end = py - 4
-                    if label_end - label_extent < limit:
+                    # B side text (rotated 270°) extends downward from (px, py-4)
+                    # Text goes from y = (py-4) downward to y = (py-4) - label_extent
+                    label_end = (py - 4) - label_extent
+                    if label_end < limit:
                         truncate = True
                 elif side == 'T':
                     label_end = py + bh + 4 + label_extent
@@ -956,9 +960,14 @@ class PDFGen:
                         truncate = True
                 # Truncate: keep last characters, replace front with "..."
                 if truncate:
-                    available_width = limit - 4 if side in ('L', 'B') else limit - (px + bw + 4)
-                    if side in ('L', 'B'):
-                        available_width = (px if side == 'L' else py) - 4 - limit
+                    if side == 'L':
+                        available_width = px - 4 - limit
+                    elif side == 'B':
+                        available_width = (py - 4) - limit  # B side extends downward
+                    elif side == 'R':
+                        available_width = limit - (px + bw + 4)
+                    elif side == 'T':
+                        available_width = limit - (py + bh + 4)
                     max_chars = max(1, int((available_width - ellipsis_width) / char_width))
                     if max_chars < name_len:
                         display_name = ellipsis + display_name[-(max_chars):]
