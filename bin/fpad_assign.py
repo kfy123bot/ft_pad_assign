@@ -924,36 +924,44 @@ class PDFGen:
             else: c.rect(px, py, bw, bh, fill=0)
             c.setFillColor(colors.black)
             # Check if label would extend beyond boundary (page edge, header, or outer frame)
+            # Truncate with "..." to keep last characters when overflow detected
             small_font = font_size
             if max_label_extent is not None and not allow_overflow:
                 char_width = font_size * 0.6
+                ellipsis = "..."
+                ellipsis_width = len(ellipsis) * char_width
                 name_len = len(display_name)
                 label_extent = name_len * char_width
                 # Header boundary for T side (labels go upward)
                 header_bottom = 510 if side == 'T' else None
+                truncate = False
+                limit = max_label_extent
                 if side == 'L':
                     label_end = px - 4
-                    limit = max_label_extent
                     if label_end - label_extent < limit:
-                        small_font = max(2, font_size - 2)
+                        truncate = True
                 elif side == 'R':
                     label_end = px + bw + 4 + label_extent
-                    limit = max_label_extent
                     if label_end > limit:
-                        small_font = max(2, font_size - 2)
+                        truncate = True
                 elif side == 'B':
                     label_end = py - 4
-                    limit = max_label_extent
                     if label_end - label_extent < limit:
-                        small_font = max(2, font_size - 2)
+                        truncate = True
                 elif side == 'T':
                     label_end = py + bh + 4 + label_extent
-                    # Check against both max_label_extent and header boundary
-                    limit = max_label_extent
                     if header_bottom is not None:
                         limit = min(limit, header_bottom) if limit else header_bottom
                     if label_end > limit:
-                        small_font = max(2, font_size - 2)
+                        truncate = True
+                # Truncate: keep last characters, replace front with "..."
+                if truncate:
+                    available_width = limit - 4 if side in ('L', 'B') else limit - (px + bw + 4)
+                    if side in ('L', 'B'):
+                        available_width = (px if side == 'L' else py) - 4 - limit
+                    max_chars = max(1, int((available_width - ellipsis_width) / char_width))
+                    if max_chars < name_len:
+                        display_name = ellipsis + display_name[-(max_chars):]
             c.setFont("Helvetica", small_font)
             if side == 'L':
                 c.drawRightString(px - 4, py + (bh/2) - (small_font/2), display_name)
