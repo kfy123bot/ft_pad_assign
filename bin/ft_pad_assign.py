@@ -584,10 +584,12 @@ class PDFGen:
         pkg_lim = {'L': pkg_edge['L'] + pkg_margin, 'R': pkg_edge['R'] - pkg_margin,
                    'B': pkg_edge['B'] + pkg_margin, 'T': pkg_edge['T'] - pkg_margin}
 
+        # Use max pin count for uniform font size across all 4 sides (PKG + APR)
+        max_cnt = max(l_cnt, b_cnt, r_cnt, t_cnt)
         for side in ('L', 'B', 'R', 'T'):
-            p_coords = self._draw_side_boxes(c, side, pkg_data_by_side[side], cx, cy, edge_pkg, getattr(self, f"_{side}_pos")(cx, cy, edge_pkg), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'PKG', label_inside=False, max_label_extent=page_lim[side])
+            p_coords = self._draw_side_boxes(c, side, pkg_data_by_side[side], cx, cy, edge_pkg, getattr(self, f"_{side}_pos")(cx, cy, edge_pkg), max_cnt, 'PKG', label_inside=False)
             pkg_coords.update(p_coords)
-            a_coords = self._draw_side_boxes(c, side, apr_data_by_side[side], cx, cy, edge_apr, getattr(self, f"_{side}_pos")(cx, cy, edge_apr), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'APR', label_inside=False, max_label_extent=pkg_lim[side], hollow_pg=True)
+            a_coords = self._draw_side_boxes(c, side, apr_data_by_side[side], cx, cy, edge_apr, getattr(self, f"_{side}_pos")(cx, cy, edge_apr), max_cnt, 'APR', label_inside=False, max_label_extent=pkg_lim[side], hollow_pg=True, skip_start_dot=True)
             apr_coords.update(a_coords)
 
         c.setLineWidth(0.3)
@@ -899,7 +901,7 @@ class PDFGen:
     def _R_pos(self, cx, cy, edge): return (cx + edge/2, cy)
     def _T_pos(self, cx, cy, edge): return (cx, cy + edge/2)
 
-    def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False, max_label_extent=None, allow_overflow=False, hollow_pg=False):
+    def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False, max_label_extent=None, allow_overflow=False, hollow_pg=False, skip_start_dot=False):
         bx, by = b_pos; coords = {}
         if not pins: return coords
         actual_cnt = len(pins); calc_total = max(actual_cnt, total); step = length / (calc_total + 1)
@@ -980,7 +982,7 @@ class PDFGen:
                 draw_dot = (side == 'L' and idx == 1)
 
                 is_combined_inner_apr = (mode == 'APR' and label_inside)
-                if draw_dot and not is_combined_inner_apr:
+                if draw_dot and not is_combined_inner_apr and not skip_start_dot:
                     dot_r = 6
                     dot_x, dot_y = px + bw/2, py + bh/2
                     if side == 'L': dot_x += bw + 12
@@ -1056,7 +1058,7 @@ class PDFGen:
             idx: Which wire (0-based) for offset calculation
         """
         offset = (idx - (count - 1) / 2) * 2
-        short_len = 5
+        short_len = 7
         stem_len = 4
 
         # Offset along the pin's long axis
