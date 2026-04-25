@@ -18,6 +18,18 @@ make clean
 make help
 ```
 
+## GitHub 操作
+
+**快速開始（新目錄）：**
+```bash
+git clone git@github.com:kfy123bot/fpad_assign.git
+cd fpad_assign
+git config user.email "kfy123.bot@gmail.com"
+git config user.name "kfy123bot"
+```
+
+**詳細指南：** [`CLAUDE.forGit.md`](CLAUDE.forGit.md)
+
 ## Development Workflow
 
 **Critical:** NEVER automatically commit or push changes. Wait for explicit user commands.
