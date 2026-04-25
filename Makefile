@@ -1,12 +1,12 @@
-# Makefile for FPAD_ASSIGN (Cross-Platform Standalone)
+# Makefile for FT_PAD_ASSIGN (Cross-Platform Standalone)
 
 # --- Configuration ---
 CXX = g++
 CXXFLAGS = -std=c++11 -Wall -O2
-CPP_SRC = bin/fpad_assign.cpp
-CPP_BIN = bin/fpad_assign_cpp
-PY_BIN  = bin/fpad_assign.py
-PL_BIN  = bin/fpad_assign.pl
+CPP_SRC = bin/ft_pad_assign.cpp
+CPP_BIN = bin/ft_pad_assign_cpp
+PY_BIN  = bin/ft_pad_assign.py
+PL_BIN  = bin/ft_pad_assign.pl
 
 EXAMPLES = examples/qfn48.8028.pin_list.csv
 V_FILES = examples/*.v
@@ -65,7 +65,7 @@ clean:
 	@echo "Clean completed."
 
 help:
-	@echo "FPAD_ASSIGN Makefile Help"
+	@echo "FT_PAD_ASSIGN Makefile Help"
 	@echo "-------------------------"
 	@echo "make build     : Compile C++ version to $(CPP_BIN)"
 	@echo "make test_py   : Run tests using Python script"

@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make test_py
 
 # Run specific example (output goes to output/ folder)
-python3 bin/fpad_assign.py -list examples/example.pin_list -o output -all
+python3 bin/ft_pad_assign.py -list examples/example.pin_list -o output -all
 
 # Clean all generated files
 make clean
@@ -22,8 +22,8 @@ make help
 
 **快速開始（新目錄）：**
 ```bash
-git clone git@github.com:kfy123bot/fpad_assign.git
-cd fpad_assign
+git clone git@github.com:kfy123bot/ft_pad_assign.git
+cd ft_pad_assign
 git config user.email "kfy123.bot@gmail.com"
 git config user.name "kfy123bot"
 ```
@@ -44,14 +44,14 @@ When working on code changes:
 
 | File | Purpose |
 |------|---------|
-| `bin/fpad_assign.py` | Main Python implementation (700+ lines) — parser, PDF gen, constraint writers |
+| `bin/ft_pad_assign.py` | Main Python implementation (700+ lines) — parser, PDF gen, constraint writers |
 | `examples/*.pin_list` / `*.csv` | Test input files (tab-separated and CSV formats) |
 | `Makefile` | Build and test automation (Python/Perl/C++ versions) |
 
-# FPAD_ASSIGN Project Understanding
+# FT_PAD_ASSIGN Project Understanding
 
 ## Overview
-FPAD_ASSIGN is an IC I/O pin assignment tool that reads pin list files and generates:
+FT_PAD_ASSIGN is an IC I/O pin assignment tool that reads pin list files and generates:
 - PKG PDF: Package pin layout diagram
 - APR PDF: Die pad layout diagram
 - Combined PDF: PKG + APR with bonding wires
@@ -234,7 +234,7 @@ Validates pin count per side matches PACKAGE header:
 
 ## Command Line Usage
 ```bash
-python3 bin/fpad_assign.py -list <pin_list_file> -o <output_folder> -all
+python3 bin/ft_pad_assign.py -list <pin_list_file> -o <output_folder> -all
 ```
 
 ## Key Code Locations
@@ -319,7 +319,7 @@ Internal field names use `DIE_PAD_NUM` (not `DIE_NUM`), regardless of input form
 
 ### 修改 1：APR/PKG PDF 框架尺寸縮小至 80%
 
-**檔案**：`bin/fpad_assign.py`
+**檔案**：`bin/ft_pad_assign.py`
 
 **位置**：`generate_apr_pdf()` 第 594 行、`generate_pkg_pdf()` 第 631 行
 
@@ -345,7 +345,7 @@ edge = 280  # 350 × 0.8 = 280
 
 **解決方案**：使用最大 pin 計數計算統一 step
 
-**檔案**：`bin/fpad_assign.py`
+**檔案**：`bin/ft_pad_assign.py`
 
 **修改位置**：
 
@@ -378,7 +378,7 @@ for side in ('L', 'B', 'R', 'T'):
 
 **解決方案**：改為使用 px（pin 左邊界）
 
-**檔案**：`bin/fpad_assign.py`，`_draw_side_boxes()` 第 760 行（B 邊）
+**檔案**：`bin/ft_pad_assign.py`，`_draw_side_boxes()` 第 760 行（B 邊）
 
 ```python
 # 修改前：
@@ -456,7 +456,7 @@ self._draw_side_boxes(c, side, data_by_side[side], ..., max_cnt, 'APR', label_in
 
 ```bash
 # 測試指令
-python3 bin/fpad_assign.py -list examples/qfn48.8028.pin_list.csv -o test_combined_overflow -all
+python3 bin/ft_pad_assign.py -list examples/qfn48.8028.pin_list.csv -o test_combined_overflow -all
 
 # 生成結果
 ✓ test_combined_overflow/PROJECT_QFN48_TEST__________apr.pdf (4.3K)
@@ -473,7 +473,7 @@ python3 bin/fpad_assign.py -list examples/qfn48.8028.pin_list.csv -o test_combin
 - ✅ 所有 PDF 正確生成，無錯誤
 
 ### 代碼統計
-- 修改檔案：1 個（`bin/fpad_assign.py`）
+- 修改檔案：1 個（`bin/ft_pad_assign.py`）
 - 修改行數：16 行（3 處修改點）
 - 函數簽名變更：1 個（`_draw_side_boxes()` 加參數）
 - 呼叫位置變更：2 個（`generate_apr_pdf()` / `generate_pkg_pdf()`）
@@ -671,11 +671,11 @@ cx, cy = width / 2, 265  # 原本是 240
 
 ```bash
 # 執行 Combined PDF 生成
-python3 bin/fpad_assign.py -list examples/qfn48.8028.pin_list.csv -o . -c -combined
+python3 bin/ft_pad_assign.py -list examples/qfn48.8028.pin_list.csv -o . -c -combined
 
 # 完整生成所有輸出
-python3 bin/fpad_assign.py -list <pin_list_file> -o <output_folder> -all
+python3 bin/ft_pad_assign.py -list <pin_list_file> -o <output_folder> -all
 
 # 測試輸出
-python3 bin/fpad_assign.py -list examples/example.pin_list -o output -all
+python3 bin/ft_pad_assign.py -list examples/example.pin_list -o output -all
 ```

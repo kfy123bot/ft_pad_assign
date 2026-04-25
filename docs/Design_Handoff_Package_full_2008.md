@@ -15,7 +15,7 @@ fiti in-house proprietary design kits for project cowork
 Utility
 UNS          		:  Netlist screener
 UTPG          		:  Test pattern translator
-FPAD_ASSIGN 	:  Pad assignment file translator
+FT_PAD_ASSIGN 	:  Pad assignment file translator
 
 Script
 PrimeTime QoR
@@ -26,7 +26,7 @@ Design kit for ASIC Design Service – User’s Manual
 fiti Static Timing Analysis User Guide
 fiti Spare Cell Guide
 
-Data Exchange / UNS / FPAD_ASSIGN will be quickly introduced in this presentation. (Important for project trial run.)
+Data Exchange / UNS / FT_PAD_ASSIGN will be quickly introduced in this presentation. (Important for project trial run.)
 
 1
 
@@ -70,7 +70,7 @@ Assign: Customer must use uns to replace it by buffer and run pre-layout simulat
 Spare Cell List (Optional)
 Format is defined in “fiti Spare Cell Insertion Guide”
 Complete Pin Sequence File (Mandatory)
-Format is defined in Design kit for ASIC Design Service – User’s Manual , chapter “FPAD_ASSIGN”
+Format is defined in Design kit for ASIC Design Service – User’s Manual , chapter “FT_PAD_ASSIGN”
  1   Customer->fiti
 5
 
@@ -99,7 +99,7 @@ write_sdc <Timing_Constraint_File.sdc>
 Customer Deliverable
 Ball Assignment Request (Optional)
 special consideration on BGA package (for example, pin location)
-Detail in Design kit for ASIC Design Service – User’s Manual, chapter “FPAD_ASSIGN”
+Detail in Design kit for ASIC Design Service – User’s Manual, chapter “FT_PAD_ASSIGN”
 ROM Code File (Mandatory)
 <install_dir>/demo/template/rom
 When the customer change the ROM code, it must be delivered again.
@@ -614,7 +614,7 @@ consider native constant propagation that will affect those timing/power librari
 ![](Picture6.jpg)
 
 ![](Picture7.jpg)
-# FPAD_ASSIGN
+# FT_PAD_ASSIGN
 
 ### Notes:
 
@@ -653,7 +653,7 @@ Pin Sequence file (complete) <project>.list.new
 
 <!-- Slide number: 38 -->
 # Command Usage
-fpad_assign [Options] configuration_file
+ft_pad_assign [Options] configuration_file
 Options:
   -apr_diagram		: generate pin diagram for APR.
   -c				: Check the consistency of IO cells between pin  sequence 			  file and verilog netlist and generate complete pin 				  sequence file.
@@ -673,7 +673,7 @@ Configuration_file  file format:
 <!-- Slide number: 39 -->
 # Command Usage (cont.)
 Generate APR Diagram
-Command: fpad_assign  -apr_diagram  <configuration_file>
+Command: ft_pad_assign  -apr_diagram  <configuration_file>
 
 ![](Picture4.jpg)
   pad8 , 32 ,48 are   powercut cells
@@ -688,7 +688,7 @@ Command: fpad_assign  -apr_diagram  <configuration_file>
 <!-- Slide number: 40 -->
 # Command Usage (cont.)
 Generate PKG Diagram
-Command: fpad_assign  -package_diagram  <configuration_file>
+Command: ft_pad_assign  -package_diagram  <configuration_file>
 
 ![](Picture6.jpg)
 9
@@ -859,7 +859,7 @@ fiti in-house proprietary design kits for project cowork
 Utility
 UNS          		:  Netlist screener
 UTPG          		:  Test pattern translator
-FPAD_ASSIGN 	:  Pad assignment file translator
+FT_PAD_ASSIGN 	:  Pad assignment file translator
 
 Script
 PrimeTime QoR
@@ -871,7 +871,7 @@ fiti Static Timing Analysis User Guide
 fiti Spare Cell Guide
 
 fiti will delivery the fiti Design Handoff Package to SONY after kick-off
-meeting. UNS/FPAD_ASSIGN’s detail are described in Design kit for ASIC
+meeting. UNS/FT_PAD_ASSIGN’s detail are described in Design kit for ASIC
 Design Service – User’s Manual
 
 55

@@ -2,7 +2,7 @@
 use strict;
 use warnings;
 
-print "Checking environment for FPAD_ASSIGN...\n";
+print "Checking environment for FT_PAD_ASSIGN...\n";
 
 my @modules = qw(PDF::API2 Getopt::Long File::Basename File::Slurp);
 my $missing = 0;
