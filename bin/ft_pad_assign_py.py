@@ -250,7 +250,7 @@ class Parser:
                 if row["DIRECTION"] == '-': row["DIRECTION"] = self.v_ports.get(sn, 'UNKNOWN')
 
 def main():
-    p = argparse.ArgumentParser(description="FPAD_ASSIGN Tool")
+    p = argparse.ArgumentParser(description="FT_PAD_ASSIGN Tool")
     p.add_argument("-list", required=True); p.add_argument("-v", nargs='+', required=True)
     p.add_argument("-apr", action="store_true"); p.add_argument("-pkg", action="store_true")
     p.add_argument("-combined", action="store_true", help="Generate combined PDF with wires")
@@ -258,7 +258,7 @@ def main():
     args = p.parse_args()
     if args.all: args.apr = args.pkg = args.combined = True
     
-    logger = Logger(); logger.info("Starting FPAD_ASSIGN...")
+    logger = Logger(); logger.info("Starting FT_PAD_ASSIGN...")
     parser = Parser(logger, args.list, args.v); parser.parse_list(); parser.parse_verilog(); parser.bridge_data()
     
     pdf = PDFGenerator(logger, parser)

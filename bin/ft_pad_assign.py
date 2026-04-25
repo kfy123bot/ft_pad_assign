@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-FPAD_ASSIGN - Standalone Version
+FT_PAD_ASSIGN - Standalone Version
 A tool for IC I/O assignment, visualization, and validation.
-Usage: python3 fpad_assign.py -list <pin_list> -v <verilog_files> [options]
+Usage: python3 ft_pad_assign.py -list <pin_list> -v <verilog_files> [options]
 """
 
 import argparse
@@ -28,7 +28,7 @@ class Logger:
         self.log_fn = log_fn
         if self.log_fn:
             with open(self.log_fn, 'w') as f:
-                f.write(f"--- FPAD_ASSIGN Execution Log ({datetime.datetime.now()}) ---\n")
+                f.write(f"--- FT_PAD_ASSIGN Execution Log ({datetime.datetime.now()}) ---\n")
 
     def info(self, msg):
         out = f"[INFO ] {msg}"
@@ -1254,7 +1254,7 @@ class Writer:
 
 # --- Main Logic ---
 def main():
-    p = argparse.ArgumentParser(description="FPAD_ASSIGN Standalone Tool")
+    p = argparse.ArgumentParser(description="FT_PAD_ASSIGN Standalone Tool")
     p.add_argument("-list", required=True, help="Pin list file")
     p.add_argument("-v", nargs='*', help="Verilog files")
     p.add_argument("-apr", action="store_true", help="APR Diagram")
@@ -1270,7 +1270,7 @@ def main():
 
     # 1. Initial Logger
     logger = Logger() # Defaults to stdout only if no filename
-    logger.info("Starting FPAD_ASSIGN Standalone Tool...")
+    logger.info("Starting FT_PAD_ASSIGN Standalone Tool...")
 
     # 2. Pre-scan the pin list for PRODUCTION NO. to set up output early
     proj_no = "fpad_out"
@@ -1297,7 +1297,7 @@ def main():
     log_path = os.path.join(out_dir, f"{proj_no}.log")
     logger.log_fn = log_path
     with open(log_path, 'w') as f:
-        f.write(f"--- FPAD_ASSIGN Execution Log ({datetime.datetime.now()}) ---\n")
+        f.write(f"--- FT_PAD_ASSIGN Execution Log ({datetime.datetime.now()}) ---\n")
         f.write(f"Project: {proj_no}\n")
     logger.info(f"Log file initialized: {log_path}")
 

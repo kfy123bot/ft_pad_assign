@@ -1,4 +1,4 @@
---- FPAD_ASSIGN Execution Log (2026-04-25 17:53:13.201675) ---
+--- FT_PAD_ASSIGN Execution Log (2026-04-25 17:53:13.201675) ---
 Project: fpad_out
 [INFO ] Log file initialized: test_out/fpad_out.log
 [INFO ] Reading Pin List: examples/qfn48.8028.pin_list.csv
