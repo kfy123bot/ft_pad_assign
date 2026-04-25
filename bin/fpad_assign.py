@@ -828,7 +828,7 @@ class PDFGen:
         for side in ('L', 'B', 'R', 'T'):
             limit = apr_edge[side]
             if side == 'T': limit = header_bottom
-            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), max_cnt, 'APR', label_inside=False, max_label_extent=limit, allow_overflow=True)
+            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), max_cnt, 'APR', label_inside=False, max_label_extent=limit)
         c.save()
 
     def generate_pkg_pdf(self, filename):
