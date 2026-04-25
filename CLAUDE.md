@@ -460,13 +460,6 @@ python3 bin/fpad_assign.py -list examples/qfn48.8028.pin_list.csv -o test_combin
 - ✅ CSV 格式輸入：完全支援，測試成功
 - ✅ 所有 PDF 正確生成，無錯誤
 
-### GitHub 提交（2026-04-24）
-- **Commit**：`ad0d9bf` - "feat: Add APR inner frame overflow protection in combined PDF"
-- **Tag**：`apr-pkg-combined-complete` - "claude code 完成 apr, pkg , combined PDF"
-- **推送結果**：
-  - main 分支已推送（f66784a...ad0d9bf）
-  - Tag 已推送至遠端
-
 ### 代碼統計
 - 修改檔案：1 個（`bin/fpad_assign.py`）
 - 修改行數：16 行（3 處修改點）
