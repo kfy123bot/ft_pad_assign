@@ -580,11 +580,14 @@ class PDFGen:
         pkg_coords, apr_coords = {}, {}
         pkg_edge = {'L': cx - edge_pkg/2, 'R': cx + edge_pkg/2, 'B': cy - edge_pkg/2, 'T': cy + edge_pkg/2}
         page_lim = {'L': 30, 'R': width - 30, 'B': 30, 'T': 510}
+        pkg_margin = 8
+        pkg_lim = {'L': pkg_edge['L'] + pkg_margin, 'R': pkg_edge['R'] - pkg_margin,
+                   'B': pkg_edge['B'] + pkg_margin, 'T': pkg_edge['T'] - pkg_margin}
 
         for side in ('L', 'B', 'R', 'T'):
             p_coords = self._draw_side_boxes(c, side, pkg_data_by_side[side], cx, cy, edge_pkg, getattr(self, f"_{side}_pos")(cx, cy, edge_pkg), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'PKG', label_inside=False, max_label_extent=page_lim[side])
             pkg_coords.update(p_coords)
-            a_coords = self._draw_side_boxes(c, side, apr_data_by_side[side], cx, cy, edge_apr, getattr(self, f"_{side}_pos")(cx, cy, edge_apr), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'APR', label_inside=False, max_label_extent=pkg_edge['B'] if side == 'B' else pkg_edge[side])
+            a_coords = self._draw_side_boxes(c, side, apr_data_by_side[side], cx, cy, edge_apr, getattr(self, f"_{side}_pos")(cx, cy, edge_apr), l_cnt if side=='L' else b_cnt if side=='B' else r_cnt if side=='R' else t_cnt, 'APR', label_inside=False, max_label_extent=pkg_lim[side], hollow_pg=True)
             apr_coords.update(a_coords)
 
         c.setLineWidth(0.3)
@@ -612,26 +615,30 @@ class PDFGen:
                 except:
                     pass
 
-                # Calculate wire start (PKG pin) and end (APR pin)
-                if side == 'L':
-                    wire_start = (p_pt['pt'][0], p_pt['pt'][1])
-                    wire_end = (a_pt['pt'][0], a_pt['pt'][1])
-                elif side == 'R':
-                    wire_start = (p_pt['pt'][0], p_pt['pt'][1])
-                    wire_end = (a_pt['pt'][0], a_pt['pt'][1])
-                elif side == 'B':
-                    wire_start = (p_pt['pt'][0], p_pt['pt'][1])
-                    wire_end = (a_pt['pt'][0], a_pt['pt'][1])
-                elif side == 'T':
-                    wire_start = (p_pt['pt'][0], p_pt['pt'][1])
-                    wire_end = (a_pt['pt'][0], a_pt['pt'][1])
+                wire_start = p_pt['pt']
+
+                a_side = a_pt['side']
+                a_wedge = a_pt['pt']
+                a_bw = a_pt['bw']
+                a_bh = a_pt['bh']
+                if a_side == 'L':
+                    wire_end = (a_wedge[0] - a_bw/2, a_wedge[1])
+                elif a_side == 'R':
+                    wire_end = (a_wedge[0] + a_bw/2, a_wedge[1])
+                elif a_side == 'B':
+                    wire_end = (a_wedge[0], a_wedge[1] - a_bh/2)
+                elif a_side == 'T':
+                    wire_end = (a_wedge[0], a_wedge[1] + a_bh/2)
                 else:
-                    wire_start, wire_end = p_pt['pt'], a_pt['pt']
+                    wire_end = a_wedge
 
                 dir_color = colors.grey
                 if row['DIRECTION'] == 'P': dir_color = colors.red
                 elif row['DIRECTION'] == 'G': dir_color = colors.blue
                 c.setStrokeColor(dir_color); c.line(wire_start[0], wire_start[1], wire_end[0], wire_end[1])
+
+                c.setFillColor(dir_color)
+                c.circle(wire_end[0], wire_end[1], 1.5, stroke=0, fill=1)
 
         # Draw inner bound red lines for D1.xx connections
         # Rule: PKG_NUM=D1.xx + DIE_NUM=yy means xx -> yy (regardless of parentheses)
@@ -744,46 +751,43 @@ class PDFGen:
                         if i == 0:
                             self.logger.error(f"  Asymmetric: {source} -> {dest}, drew DASHED line")
 
-        # Draw downbound ground symbols
-        # When PKG_NUM=0, DIRECTION=G, collect ground wire counts per DIE_NUM
-        ground_rows = []
+        # Draw ground symbols with anchor-dot style
+        entries = {}  # coord_key -> count
+
+        # Ground pins (PKG_NUM=0, DIRECTION=G)
         for row in self.parser.data:
-            pnum = row['PKG_NUM']
-            direction = row['DIRECTION']
-
-            # Skip if not PKG_NUM=0 and DIRECTION=G
-            if pnum != '0' or direction != 'G':
+            if row['PKG_NUM'] != '0' or row['DIRECTION'] != 'G':
                 continue
-
             die_num = row['DIE_NUM']
-            # Skip invalid DIE_NUM
             if die_num in ('0', '-', ''):
                 continue
+            entries[die_num] = entries.get(die_num, 0) + 1
 
-            ground_rows.append(row)
-
-        # Group by (die_num, die_pin_name) to count duplicates
-        ground_counts = {}
-        for row in ground_rows:
-            key = (row['DIE_NUM'], row['DIE_PIN_NAME'])
-            if key not in ground_counts:
-                ground_counts[key] = []
-            ground_counts[key].append(row)
-
-        # Draw ground symbols for each unique (die_num, die_pin_name)
-        for (die_num, pin_name), rows in ground_counts.items():
-            count = len(rows)
-            apr_pin = apr_coords.get(die_num)
+        for coord_key, count in entries.items():
+            apr_pin = apr_coords.get(coord_key)
             if not apr_pin:
                 continue
 
             pt = apr_pin['pt']
+            bw = apr_pin['bw']
+            bh = apr_pin['bh']
             side = apr_pin['side']
 
-            for i in range(count):
-                self._draw_ground_symbol(c, pt[0], pt[1], side, count, i)
+            if side == 'L':
+                cx_c, cy_c = pt[0] - bw / 2, pt[1]
+            elif side == 'R':
+                cx_c, cy_c = pt[0] + bw / 2, pt[1]
+            elif side == 'B':
+                cx_c, cy_c = pt[0], pt[1] - bh / 2
+            elif side == 'T':
+                cx_c, cy_c = pt[0], pt[1] + bh / 2
+            else:
+                continue
 
-            self.logger.info(f"  Downbound GND: die={die_num}, pin={pin_name}, count={count}")
+            for i in range(count):
+                self._draw_ground_symbol(c, cx_c, cy_c, side, count, i)
+
+            self.logger.info(f"  Ground/DB: key={coord_key}, count={count}")
 
         self._draw_center_info(c, cx, cy, edge_apr, l_cnt, b_cnt, r_cnt, t_cnt, apr_data_by_side)
         c.save()
@@ -895,7 +899,7 @@ class PDFGen:
     def _R_pos(self, cx, cy, edge): return (cx + edge/2, cy)
     def _T_pos(self, cx, cy, edge): return (cx, cy + edge/2)
 
-    def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False, max_label_extent=None, allow_overflow=False):
+    def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False, max_label_extent=None, allow_overflow=False, hollow_pg=False):
         bx, by = b_pos; coords = {}
         if not pins: return coords
         actual_cnt = len(pins); calc_total = max(actual_cnt, total); step = length / (calc_total + 1)
@@ -921,56 +925,37 @@ class PDFGen:
             c.setLineWidth(0.5); c.setStrokeColor(colors.black); direction = pin['DIRECTION']
             if 'POWERCUT' in pname.upper(): c.setFillColor(colors.black); c.rect(px, py, bw, bh, fill=1)
             elif pname.upper() == 'NC': c.setFillColor(colors.black); c.rect(px, py, bw, bh, fill=1)
-            elif direction == 'P': c.setFillColor(colors.red); c.rect(px, py, bw, bh, fill=1)
-            elif direction == 'G': c.setFillColor(colors.blue); c.rect(px, py, bw, bh, fill=1)
+            elif direction == 'P':
+                if hollow_pg: c.setStrokeColor(colors.red); c.rect(px, py, bw, bh, fill=0)
+                else: c.setFillColor(colors.red); c.rect(px, py, bw, bh, fill=1)
+            elif direction == 'G':
+                if hollow_pg: c.setStrokeColor(colors.blue); c.rect(px, py, bw, bh, fill=0)
+                else: c.setFillColor(colors.blue); c.rect(px, py, bw, bh, fill=1)
             else: c.rect(px, py, bw, bh, fill=0)
             c.setFillColor(colors.black)
-            # Check if label would extend beyond boundary (page edge, header, or outer frame)
-            # Truncate with "..." to keep last characters when overflow detected
             small_font = font_size
             if max_label_extent is not None and not allow_overflow:
-                char_width = font_size * 0.6
-                ellipsis = "..."
-                ellipsis_width = len(ellipsis) * char_width
                 name_len = len(display_name)
-                label_extent = name_len * char_width
-                # Header boundary for T side (labels go upward)
                 header_bottom = 510 if side == 'T' else None
-                truncate = False
                 limit = max_label_extent
+                if side == 'T' and header_bottom is not None:
+                    limit = min(limit, header_bottom) if limit else header_bottom
+
                 if side == 'L':
-                    label_end = px - 4
-                    if label_end - label_extent < limit:
-                        truncate = True
+                    available_width = px - 4 - limit
                 elif side == 'R':
-                    label_end = px + bw + 4 + label_extent
-                    if label_end > limit:
-                        truncate = True
+                    available_width = limit - (px + bw + 4)
                 elif side == 'B':
-                    # B side text (rotated 270°) extends downward from (px, py-4)
-                    # Text goes from y = (py-4) downward to y = (py-4) - label_extent
-                    label_end = (py - 4) - label_extent
-                    if label_end < limit:
-                        truncate = True
+                    available_width = (py - 4) - limit
                 elif side == 'T':
-                    label_end = py + bh + 4 + label_extent
-                    if header_bottom is not None:
-                        limit = min(limit, header_bottom) if limit else header_bottom
-                    if label_end > limit:
-                        truncate = True
-                # Truncate: keep last characters, replace front with "..."
-                if truncate:
-                    if side == 'L':
-                        available_width = px - 4 - limit
-                    elif side == 'B':
-                        available_width = (py - 4) - limit  # B side extends downward
-                    elif side == 'R':
-                        available_width = limit - (px + bw + 4)
-                    elif side == 'T':
-                        available_width = limit - (py + bh + 4)
-                    max_chars = max(1, int((available_width - ellipsis_width) / char_width))
-                    if max_chars < name_len:
-                        display_name = ellipsis + display_name[-(max_chars):]
+                    available_width = limit - (py + bh + 4)
+
+                for try_font in range(int(font_size), 1, -1):
+                    char_width = try_font * 0.6
+                    if name_len * char_width <= available_width:
+                        small_font = try_font
+                        break
+                    small_font = max(2, try_font)
             c.setFont("Helvetica", small_font)
             if side == 'L':
                 c.drawRightString(px - 4, py + (bh/2) - (small_font/2), display_name)
@@ -1046,81 +1031,71 @@ class PDFGen:
         x, y = frame_edge_pt
         c.setFillColor(color); c.setStrokeColor(color); c.setLineWidth(0.5)
         if side == 'L':
-            # Original pin: (box_len x box_thickness) at frame edge
-            # Extended: same shape, starts at frame inner edge, extends inward
             c.rect(x, y - box_thickness/2, box_len, box_thickness, fill=0, stroke=1)
+            c.circle(x + box_len/2, y, 1.5, stroke=0, fill=1)
         elif side == 'R':
-            # Original pin: (box_len x box_thickness) at frame edge
-            # Extended: same shape, starts at frame inner edge, extends inward
             c.rect(x - box_len, y - box_thickness/2, box_len, box_thickness, fill=0, stroke=1)
+            c.circle(x - box_len/2, y, 1.5, stroke=0, fill=1)
         elif side == 'B':
-            # B side: frame at y=350, chip center at y=240, toward center = upward (y increases)
-            # Original pin: (box_len x box_thickness) where box_len=bw(width), box_thickness=bh(height)
-            # Extended: width scaled to 80%, height=box_thickness, bottom at y, extending upward
             width = box_len * 0.8
             c.rect(x - width/2, y, width, box_thickness, fill=0, stroke=1)
+            c.circle(x, y + box_thickness/2, 1.5, stroke=0, fill=1)
         elif side == 'T':
-            # T side: frame at y=130, chip center at y=240, toward center = downward (y decreases)
-            # Original pin: (box_len x box_thickness) where box_len=bw(width), box_thickness=bh(height)
-            # Extended: width scaled to 80%, height=box_thickness, top at y, extending downward
             width = box_len * 0.8
             c.rect(x - width/2, y - box_thickness, width, box_thickness, fill=0, stroke=1)
+            c.circle(x, y - box_thickness/2, 1.5, stroke=0, fill=1)
 
-    def _draw_ground_symbol(self, c, x, y, side, count, idx):
-        """Draw ground symbol (short wire + GND symbol) extending outward from APR pin.
+    def _draw_ground_symbol(self, c, cx, cy, side, count, idx):
+        """Draw anchor-dot ground symbol: dot at pin center -> short wire -> ground symbol.
 
         Args:
             c: PDF canvas
-            x, y: Starting point (APR pin coordinate)
-            side: Which side (L/B/R/T) to determine direction
+            cx, cy: Center of the APR pin shape (anchor point)
+            side: Which side (L/B/R/T) to determine outward direction
             count: Total number of ground wires for this pin
             idx: Which wire (0-based) for offset calculation
         """
-        # Calculate offset for multiple ground wires (centered)
-        offset = (idx - (count - 1) / 2) * 4
+        offset = (idx - (count - 1) / 2) * 2
+        short_len = 5
+        stem_len = 4
 
-        # Short wire length extending outward
-        short_len = 12
+        # Offset along the pin's long axis
+        if side in ('L', 'R'):
+            ax, ay = cx, cy + offset  # vertical spread
+        else:
+            ax, ay = cx + offset, cy  # horizontal spread
 
         c.setStrokeColor(colors.blue)
+        c.setFillColor(colors.blue)
         c.setLineWidth(1.0)
 
+        # Anchor dot
+        c.circle(ax, ay, 1.5, stroke=0, fill=1)
+
         if side == 'L':
-            # Extend leftward from APR pin
-            wire_end_x, wire_end_y = x - short_len, y + offset
-            c.line(x, y, wire_end_x, wire_end_y)
-            # Ground symbol at wire end (inverted T pointing left): vertical + 3 horizontal lines
-            c.line(wire_end_x, wire_end_y, wire_end_x - 6, wire_end_y)  # vertical
-            c.line(wire_end_x - 5, wire_end_y, wire_end_x - 5, wire_end_y - 3)  # bottom
-            c.line(wire_end_x - 5, wire_end_y - 1, wire_end_x - 5, wire_end_y - 4)
-            c.line(wire_end_x - 5, wire_end_y - 2, wire_end_x - 5, wire_end_y - 5)
+            end_x, end_y = ax - short_len, ay
+            c.line(ax, ay, end_x, end_y)
+            c.line(end_x, end_y, end_x - stem_len, end_y)
+            c.line(end_x - stem_len, end_y - 3, end_x - stem_len, end_y + 3)
+            c.line(end_x - stem_len + 2, end_y - 2, end_x - stem_len + 2, end_y + 2)
         elif side == 'R':
-            # Extend rightward from APR pin
-            wire_end_x, wire_end_y = x + short_len, y + offset
-            c.line(x, y, wire_end_x, wire_end_y)
-            # Ground symbol (inverted T pointing right)
-            c.line(wire_end_x, wire_end_y, wire_end_x + 6, wire_end_y)
-            c.line(wire_end_x + 5, wire_end_y, wire_end_x + 5, wire_end_y - 3)
-            c.line(wire_end_x + 5, wire_end_y - 1, wire_end_x + 5, wire_end_y - 4)
-            c.line(wire_end_x + 5, wire_end_y - 2, wire_end_x + 5, wire_end_y - 5)
+            end_x, end_y = ax + short_len, ay
+            c.line(ax, ay, end_x, end_y)
+            c.line(end_x, end_y, end_x + stem_len, end_y)
+            c.line(end_x + stem_len, end_y - 3, end_x + stem_len, end_y + 3)
+            c.line(end_x + stem_len - 2, end_y - 2, end_x + stem_len - 2, end_y + 2)
         elif side == 'B':
-            # Extend downward from APR pin
-            wire_end_x, wire_end_y = x + offset, y - short_len
-            c.line(x, y, wire_end_x, wire_end_y)
-            # Ground symbol pointing downward (T shape)
-            c.line(wire_end_x, wire_end_y, wire_end_x, wire_end_y - 6)
-            c.line(wire_end_x, wire_end_y - 5, wire_end_x - 3, wire_end_y - 5)
-            c.line(wire_end_x, wire_end_y - 4, wire_end_x - 2, wire_end_y - 4)
-            c.line(wire_end_x, wire_end_y - 3, wire_end_x - 1, wire_end_y - 3)
+            end_x, end_y = ax, ay - short_len
+            c.line(ax, ay, end_x, end_y)
+            c.line(end_x, end_y, end_x, end_y - stem_len)
+            c.line(end_x - 3, end_y - stem_len, end_x + 3, end_y - stem_len)
+            c.line(end_x - 2, end_y - stem_len + 2, end_x + 2, end_y - stem_len + 2)
         elif side == 'T':
-            # Extend upward from APR pin
-            wire_end_x, wire_end_y = x + offset, y + short_len
-            c.line(x, y, wire_end_x, wire_end_y)
-            # Ground symbol pointing upward (inverted T)
-            c.line(wire_end_x, wire_end_y, wire_end_x, wire_end_y + 6)
-            c.line(wire_end_x, wire_end_y + 5, wire_end_x - 3, wire_end_y + 5)
-            c.line(wire_end_x, wire_end_y + 4, wire_end_x - 2, wire_end_y + 4)
-            c.line(wire_end_x, wire_end_y + 3, wire_end_x - 1, wire_end_y + 3)
+            end_x, end_y = ax, ay + short_len
+            c.line(ax, ay, end_x, end_y)
+            c.line(end_x, end_y, end_x, end_y + stem_len)
+            c.line(end_x - 3, end_y + stem_len, end_x + 3, end_y + stem_len)
+            c.line(end_x - 2, end_y + stem_len - 2, end_x + 2, end_y + stem_len - 2)
 
     def _draw_header(self, c, title, width, height):
         c.setLineWidth(1); c.setStrokeColor(colors.black); c.rect(50, height - 85, width - 100, 65)
