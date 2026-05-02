@@ -706,7 +706,7 @@ make test_py
 1. `_ring_shift_data()` — 重排 `self.data` 以 aa 為起點
 2. `_reindex_pkg_num()` — PKG_NUM 從 1 重新編號，PKG_TOP_LEFT_PIN 重置為 1
 3. `_reassign_pkg_loc()` — 全部重算 PKG_LOC
-4. `_reassign_die_loc()` — DIE_LOC 跟隨 PKG_LOC 模式（共用 pad 繼承）
+4. `_reassign_die_loc()` — DIE_LOC 跟隨 PKG_LOC 模式（僅在 ring 被 shift 時觸發，aa=1 時維持原樣）
 5. `_sanity_check_list()` — 驗證 side 數量
 6. `_reorder_and_reindex_apr_data()` — DIE_NUM 從新 L 邊起點重排
 

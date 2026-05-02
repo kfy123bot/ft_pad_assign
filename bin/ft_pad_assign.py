@@ -456,6 +456,7 @@ class Parser:
 
         sortable.sort(key=lambda x: x[0])
         self.data = [row for _, row in sortable]
+        self._ring_shifted = True
         self.logger.info(f"Ring-shifted data: PKG_TOP_LEFT_PIN={aa}, offset={offset}, total={total}")
 
     def _reindex_pkg_num(self):
@@ -544,9 +545,10 @@ class Parser:
 
     def _reassign_die_loc(self):
         """Reassign DIE_LOC to follow PKG_LOC pattern (L->B->R->T).
-        Rows with valid PKG_LOC get DIE_LOC = PKG_LOC.
-        Rows without PKG_NUM follow the nearest preceding row's PKG_LOC.
+        Only active when ring was shifted (PKG_TOP_LEFT_PIN originally != 1).
         """
+        if not getattr(self, '_ring_shifted', False):
+            return
         last_side = '-'
         reassigned = 0
         for row in self.data:

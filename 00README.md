@@ -1,4 +1,4 @@
-# 00README — 2026-05-02 Session Changes
+# 00README — 2026-05-02 + 2026-05-03 Session Changes
 
 ## 新增欄位：PKG_PIN_NAME
 
@@ -15,7 +15,7 @@ PKG PDF 上的 pin 名稱現在優先使用 `PKG_PIN_NAME` 欄位，若該欄位
 - `self.data` 以 PKG_TOP_LEFT_PIN 為起點重新排序（L 邊第一根）
 - PKG_NUM 從 1 開始重新編號
 - PKG_LOC 全部重算（L=1~L_cnt, B 接續, R 接續, T 接續）
-- DIE_LOC 跟隨 PKG_LOC 模式（共用 die pad 繼承最近 PKG_LOC）
+- DIE_LOC 跟隨 PKG_LOC 模式（共用 die pad 繼承最近 PKG_LOC）— 僅 aa≠1 時觸發，aa=1 時 DIE_LOC 維持原樣
 - DIE_NUM ring 重排從新的第一個 L pin 開始
 - `.new` / `.new.csv` 輸出按 ring 順序排列
 
