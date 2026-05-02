@@ -678,4 +678,69 @@ python3 bin/ft_pad_assign.py -list <pin_list_file> -o <output_folder> -all
 
 # 測試輸出
 python3 bin/ft_pad_assign.py -list examples/example.pin_list -o output -all
+
+# 使用 make 測試所有 CSV
+make test_py
+```
+
+---
+
+## 修改歷史（2026-05-02）— 完整功能更新
+
+### PKG_PIN_NAME 欄位
+
+新增 `PKG_PIN_NAME` 欄位支援，用於指定 PKG PDF 上顯示的 pin 名稱。若為空或 `-` 則 fallback 到 `DIE_PIN_NAME`。
+
+- **影響範圍**：`_draw_side_boxes()` mode='PKG' — standalone PKG PDF + Combined PDF PKG 外框
+- **代碼位置**：`_draw_side_boxes()` 第 912 行
+
+### PKG_LOC 自動補全
+
+當 `PKG_LOC` 欄位為 `-` 時，依 PACKAGE header 的 L/B/R/T 數量自動補上對應 side。補全前做總數校驗（sum vs actual），不一致報 ERROR。
+
+- **代碼位置**：`_reassign_pkg_loc()` 取代 `_auto_fill_pkg_loc()`
+
+### PKG_TOP_LEFT_PIN Ring 重排
+
+`PKG_TOP_LEFT_PIN: aa` 指定 L 邊第一根 pin。當 `aa != 1` 時：
+1. `_ring_shift_data()` — 重排 `self.data` 以 aa 為起點
+2. `_reindex_pkg_num()` — PKG_NUM 從 1 重新編號，PKG_TOP_LEFT_PIN 重置為 1
+3. `_reassign_pkg_loc()` — 全部重算 PKG_LOC
+4. `_reassign_die_loc()` — DIE_LOC 跟隨 PKG_LOC 模式（共用 pad 繼承）
+5. `_sanity_check_list()` — 驗證 side 數量
+6. `_reorder_and_reindex_apr_data()` — DIE_NUM 從新 L 邊起點重排
+
+### DIE_NUM 重排修正
+
+`_reorder_and_reindex_apr_data()` 和 `bridge_data()` 不再跳過 PKG_NUM 為 `-` 的行，所有合法 DIE_NUM 參與 ring 重排。
+
+### APR PDF 顯示所有 Die Pad
+
+`generate_apr_pdf()` 和 `generate_combined_pdf()` 的 APR 收集邏輯移除 `PKG_NUM == '-'` skip，共用 die pad 也顯示。
+
+### PRODUCTION NO / PROJECT NO 相容
+
+Header regex 接受 `PRODUCTION NO`、`PRODUCTION NO.`、`PROJECT NO`、`PROJECT NO.` 四種寫法，正規化為 `PRODUCTION NO`。Prefix 尾端空白/底線自動去除。
+
+### 其他
+
+- **無 `-v` 時跳過 Innovus/ICC2**：`main()` 只在有 verilog 時產生 `.const` 檔案
+- **`.new.csv` header**：補上與 `.new` 一致的 PACKAGE/PKG_TOP_LEFT_PIN/PRODUCTION NO/VERSION 資訊（`#` 前綴）
+- **空 row 過濾**：`.new`/`.new.csv` 跳過 PKG_NUM 和 DIE_NUM 同時為 `-` 的行
+- **Makefile**：`$(wildcard examples/*.csv)` 自動發現測試檔
+
+### 新增方法一覽
+
+| 方法 | 類別 | 用途 |
+|------|------|------|
+| `_get_ring_side()` | Parser | 共用 side 計算（含 PKG_TOP_LEFT_PIN ring offset） |
+| `_ring_shift_data()` | Parser | 依 PKG_TOP_LEFT_PIN 重排 self.data |
+| `_reindex_pkg_num()` | Parser | PKG_NUM 從 1 重編 |
+| `_reassign_pkg_loc()` | Parser | 全部重算 PKG_LOC（取代 `_auto_fill_pkg_loc`） |
+| `_reassign_die_loc()` | Parser | DIE_LOC 跟隨 PKG_LOC 模式 |
+
+### 執行順序（parse_list）
+
+```
+_ring_shift_data → _reindex_pkg_num → _reassign_pkg_loc → _reassign_die_loc → _sanity_check_list → _reorder_and_reindex_apr_data
 ```

@@ -8,8 +8,8 @@ CPP_BIN = bin/ft_pad_assign_cpp
 PY_BIN  = bin/ft_pad_assign.py
 PL_BIN  = bin/ft_pad_assign.pl
 
-EXAMPLES = examples/qfn48.8028.pin_list.csv
-V_FILES = examples/*.v
+EXAMPLES = $(wildcard examples/*.csv)
+V_FILES = $(wildcard examples/*.v)
 
 # --- Main Targets ---
 all: build
@@ -60,8 +60,7 @@ test_all: test_py test_pl test_cpp
 clean:
 	@echo "Cleaning up generated files and binaries..."
 	@rm -f $(CPP_BIN)
-	@rm -f examples/*.new examples/*_stagger.rpt examples/*_chip*.const
-	@rm -f examples/*_apr.pdf examples/*_pkg.pdf examples/*_combined.pdf
+	@rm -rf test_out
 	@echo "Clean completed."
 
 help:

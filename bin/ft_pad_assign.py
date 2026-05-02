@@ -96,8 +96,12 @@ class Parser:
                 else:
                     self._parse_txt(f)
             self.logger.info(f"Loaded {len(self.data)} entries from pin list.")
-            self._reorder_and_reindex_apr_data()
+            self._ring_shift_data()
+            self._reindex_pkg_num()
+            self._reassign_pkg_loc()
+            self._reassign_die_loc()
             self._sanity_check_list()
+            self._reorder_and_reindex_apr_data()
         except Exception as e:
             self.logger.fatal(f"Error parsing list: {e}")
 
@@ -115,11 +119,13 @@ class Parser:
             # If line has ':' in first column and doesn't look like CSV data, it's a header
             if ':' in stripped and not stripped.startswith(('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '(', 'D')):
                 # Parse header line (handle CSV format with commas like "PACKAGE,,: value")
-                match = re.search(r'^(PRODUCTION NO\.|PKG_TOP_LEFT_PIN|PACKAGE|VERSION)[,\s]*:\s*(.*)', stripped, re.I)
+                match = re.search(r'^(PRODUCTION NO\.?|PROJECT NO\.?|PKG_TOP_LEFT_PIN|PACKAGE|VERSION)[,\s]*:\s*(.*)', stripped, re.I)
                 if match:
-                    # Remove trailing commas and whitespace
                     value = match.group(2).strip().rstrip(',')
-                    self.header[match.group(1).upper()] = value
+                    key = match.group(1).upper().rstrip('.')
+                    if key == 'PROJECT NO':
+                        key = 'PRODUCTION NO'
+                    self.header[key] = value
                 data_start = i + 1
             else:
                 # Alias-aware header detection: check if any PKG_NUM alias appears in the header
@@ -187,9 +193,12 @@ class Parser:
         for line in f:
             line = line.strip()
             if not line or re.match(r'^-+$', line): continue
-            match = re.search(r'^(PRODUCTION NO\.|PKG_TOP_LEFT_PIN|PACKAGE|VERSION)\s*:\s*(.*)', line, re.I)
+            match = re.search(r'^(PRODUCTION NO\.?|PROJECT NO\.?|PKG_TOP_LEFT_PIN|PACKAGE|VERSION)\s*:\s*(.*)', line, re.I)
             if match:
-                self.header[match.group(1).upper()] = match.group(2)
+                key = match.group(1).upper().rstrip('.')
+                if key == 'PROJECT NO':
+                    key = 'PRODUCTION NO'
+                self.header[key] = match.group(2)
                 continue
             # Alias-aware header detection: check if any PKG_NUM alias appears in the header
             words = set(line.upper().split())
@@ -255,7 +264,7 @@ class Parser:
         for row in self.data:
             # Skip special rows - treat as comment, output as-is
             pkg_upper = row['PKG_NUM'].upper()
-            if pkg_upper == 'INNER_BOUND' or row['PKG_NUM'] == '-' or row['DIE_NUM'] == '-':
+            if pkg_upper == 'INNER_BOUND' or row['DIE_NUM'] == '-':
                 continue
             d_num = row['DIE_NUM']
             p_num = row['PKG_NUM']
@@ -271,9 +280,9 @@ class Parser:
         start_idx = -1
         for i, row in enumerate(self.data):
             # Skip special rows
-            if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['PKG_NUM'] == '-' or row['DIE_NUM'] == '-':
+            if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['DIE_NUM'] == '-':
                 continue
-            if row['DIE_LOC'].upper() == 'L' and row['DIE_PIN_NAME'].upper() != 'NC' and row['DIE_NUM'] != '0':
+            if row['PKG_LOC'].upper() == 'L' and row['DIE_PIN_NAME'].upper() != 'NC' and row['DIE_NUM'] != '0':
                 start_idx = i
                 break
 
@@ -283,7 +292,7 @@ class Parser:
             orig_to_new = {}  # Map: original DIE_NUM -> new DIE_NUM (for duplicates)
             for row in ring_seq:
                 # Skip special rows
-                if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['PKG_NUM'] == '-' or row['DIE_NUM'] == '-':
+                if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['DIE_NUM'] == '-':
                     continue
                 if row['DIE_PIN_NAME'].upper() == 'NC' or row['DIE_NUM'] == '0':
                     row['DIE_NUM'] = '0'
@@ -325,22 +334,6 @@ class Parser:
         expected = {'L': int(parts[1]), 'B': int(parts[2]), 'R': int(parts[3]), 'T': int(parts[4])}
         self.logger.info(f"PACKAGE header defines: L={expected['L']}, B={expected['B']}, R={expected['R']}, T={expected['T']}")
 
-        # Helper to infer side from PIN_NUM using cumulative counts
-        # e.g., 48QFN 12 12 12 12 -> L:1-12, B:13-24, R:25-36, T:37-48
-        def get_side_from_pnum(pnum_str):
-            try:
-                p = int(pnum_str)
-                if p == 0:
-                    return None
-                cumulative = 0
-                for side in ['L', 'B', 'R', 'T']:
-                    cumulative += expected[side]
-                    if p <= cumulative:
-                        return side
-                return None
-            except (ValueError, TypeError):
-                return None
-
         actual_pnums = {'L': set(), 'B': set(), 'R': set(), 'T': set()}
 
         for row in self.data:
@@ -348,13 +341,8 @@ class Parser:
             pnum = row['PKG_NUM']
             pname = row['DIE_PIN_NAME'].upper()
 
-            # Count every unique physical pin number (including NC)
-            # 1. Ignore '0', '-', or empty which are not physical pin slots
-            # 2. Ignore Dummy Pins starting with 'D' or formatted as (D...)
-            # 3. EXCEPT: DOWNBOUND should be counted in PKG (DIE_NUM is 0 but PKG has the pin)
-            #    Use PIN_NUM to infer side if LOCATION is invalid
             if pname == 'DOWNBOUND':
-                side = loc if loc in actual_pnums else get_side_from_pnum(pnum)
+                side = loc if loc in actual_pnums else self._get_ring_side(pnum)
                 if side:
                     actual_pnums[side].add(pnum)
             elif pnum in ('0', '-', '') or pnum.upper().startswith('D') or '(D' in pnum.upper():
@@ -389,6 +377,200 @@ class Parser:
              self.logger.info(f"Total pin count check passed: {total_act} pins.")
         
         self.logger.info("Pin list sanity check complete.")
+
+    def _get_ring_side(self, pnum_str):
+        """Determine L/B/R/T side for a PKG_NUM, accounting for PKG_TOP_LEFT_PIN ring offset.
+        Returns side string or None if PKG_NUM is invalid.
+        """
+        try:
+            p_int = int(pnum_str)
+            if p_int <= 0:
+                return None
+        except (ValueError, TypeError):
+            return None
+
+        pkg_str = self.header.get('PACKAGE', '')
+        if not pkg_str:
+            return None
+        parts = pkg_str.split()
+        if len(parts) < 5:
+            return None
+        expected = {'L': int(parts[1]), 'B': int(parts[2]), 'R': int(parts[3]), 'T': int(parts[4])}
+        total = sum(expected.values())
+
+        aa_str = self.header.get('PKG_TOP_LEFT_PIN', '1')
+        try:
+            aa = int(aa_str)
+        except (ValueError, TypeError):
+            aa = 1
+
+        offset = aa - 1
+        ring_order = ((p_int - offset - 1) % total) + 1
+
+        cumulative = 0
+        for side in ['L', 'B', 'R', 'T']:
+            cumulative += expected[side]
+            if ring_order <= cumulative:
+                return side
+        return None
+
+    def _ring_shift_data(self):
+        """Reorder self.data so PKG_TOP_LEFT_PIN becomes the first L-side pin.
+        When PKG_TOP_LEFT_PIN is 1 or missing, this is a no-op.
+        """
+        aa_str = self.header.get('PKG_TOP_LEFT_PIN', '1')
+        try:
+            aa = int(aa_str)
+        except (ValueError, TypeError):
+            return
+        if aa == 1:
+            return
+
+        pkg_str = self.header.get('PACKAGE', '')
+        if not pkg_str:
+            return
+        parts = pkg_str.split()
+        if len(parts) < 5:
+            return
+        total = sum(int(x) for x in parts[1:5])
+        offset = aa - 1
+
+        # Compute sort key for each row
+        sortable = []
+        last_pkg_sort_key = 0
+        for row in self.data:
+            pnum = row['PKG_NUM']
+            if pnum.upper() == 'INNER_BOUND':
+                sortable.append((float('inf'), row))
+                continue
+            try:
+                p_int = int(pnum)
+                if p_int > 0:
+                    ring_pos = ((p_int - offset - 1) % total)
+                    last_pkg_sort_key = ring_pos
+                    sortable.append((ring_pos, row))
+                else:
+                    sortable.append((last_pkg_sort_key + 0.5, row))
+            except (ValueError, TypeError):
+                sortable.append((last_pkg_sort_key + 0.5, row))
+
+        sortable.sort(key=lambda x: x[0])
+        self.data = [row for _, row in sortable]
+        self.logger.info(f"Ring-shifted data: PKG_TOP_LEFT_PIN={aa}, offset={offset}, total={total}")
+
+    def _reindex_pkg_num(self):
+        """Re-index PKG_NUM sequentially from 1 following ring order.
+        Only applies when PKG_TOP_LEFT_PIN != 1.
+        After re-indexing, PKG_TOP_LEFT_PIN is reset to 1 since numbering starts from 1.
+        """
+        aa_str = self.header.get('PKG_TOP_LEFT_PIN', '1')
+        try:
+            aa = int(aa_str)
+        except (ValueError, TypeError):
+            return
+        if aa == 1:
+            return
+
+        idx = 1
+        reassigned = 0
+        for row in self.data:
+            pnum = row['PKG_NUM']
+            if pnum.upper() == 'INNER_BOUND':
+                continue
+            try:
+                p_int = int(pnum)
+                if p_int > 0:
+                    row['PKG_NUM'] = str(idx)
+                    idx += 1
+                    reassigned += 1
+            except (ValueError, TypeError):
+                pass
+
+        if reassigned > 0:
+            self.header['PKG_TOP_LEFT_PIN'] = '1'
+            self.logger.info(f"Re-indexed PKG_NUM for {reassigned} rows (PKG_TOP_LEFT_PIN reset to 1)")
+
+    def _reassign_pkg_loc(self):
+        """Reassign PKG_LOC for all rows based on PKG_NUM and PACKAGE header L/B/R/T counts.
+        Accounts for PKG_TOP_LEFT_PIN ring offset via _get_ring_side().
+        Also validates that sum(L,B,R,T) matches total unique PKG_NUM count.
+        """
+        pkg_str = self.header.get('PACKAGE', '')
+        if not pkg_str:
+            self.logger.warn("PACKAGE header missing, cannot reassign PKG_LOC.")
+            return
+
+        parts = pkg_str.split()
+        if len(parts) < 5:
+            self.logger.error(f"Invalid PACKAGE format: '{pkg_str}'")
+            return
+
+        expected = {'L': int(parts[1]), 'B': int(parts[2]), 'R': int(parts[3]), 'T': int(parts[4])}
+        total_expected = sum(expected.values())
+
+        valid_pnums = set()
+        for row in self.data:
+            pnum = row['PKG_NUM']
+            if pnum in ('0', '-', '') or pnum.upper() == 'INNER_BOUND':
+                continue
+            if pnum.upper().startswith('D') or '(D' in pnum.upper():
+                continue
+            try:
+                p_int = int(pnum)
+                if p_int > 0:
+                    valid_pnums.add(p_int)
+            except (ValueError, TypeError):
+                pass
+
+        total_actual = len(valid_pnums)
+        if total_expected != total_actual:
+            self.logger.error(
+                f"PKG_LOC reassign TOTAL MISMATCH: "
+                f"PACKAGE header expects {total_expected} pins (L={expected['L']} B={expected['B']} "
+                f"R={expected['R']} T={expected['T']}), but found {total_actual} unique PKG_NUMs"
+            )
+
+        reassigned = 0
+        for row in self.data:
+            side = self._get_ring_side(row['PKG_NUM'])
+            if side:
+                if row['PKG_LOC'] != side:
+                    row['PKG_LOC'] = side
+                    reassigned += 1
+            # Rows with invalid PKG_NUM keep their existing PKG_LOC
+
+        if reassigned > 0:
+            self.logger.info(f"Reassigned PKG_LOC for {reassigned} rows.")
+
+    def _reassign_die_loc(self):
+        """Reassign DIE_LOC to follow PKG_LOC pattern (L->B->R->T).
+        Rows with valid PKG_LOC get DIE_LOC = PKG_LOC.
+        Rows without PKG_NUM follow the nearest preceding row's PKG_LOC.
+        """
+        last_side = '-'
+        reassigned = 0
+        for row in self.data:
+            pkg_loc = row['PKG_LOC']
+            if pkg_loc and pkg_loc != '-':
+                last_side = pkg_loc
+            pnum = row['PKG_NUM']
+            if pnum in ('0', '-', '') or pnum.upper() == 'INNER_BOUND':
+                # Shared die pad or special row: DIE_LOC follows nearest PKG_LOC
+                if last_side != '-' and row['DIE_LOC'] != last_side:
+                    row['DIE_LOC'] = last_side
+                    reassigned += 1
+            else:
+                try:
+                    p_int = int(pnum)
+                    if p_int > 0 and pkg_loc and pkg_loc != '-':
+                        if row['DIE_LOC'] != pkg_loc:
+                            row['DIE_LOC'] = pkg_loc
+                            reassigned += 1
+                except (ValueError, TypeError):
+                    pass
+
+        if reassigned > 0:
+            self.logger.info(f"Reassigned DIE_LOC for {reassigned} rows.")
 
     def parse_verilog(self):
         for v_file in self.v_files:
@@ -427,7 +609,7 @@ class Parser:
         referencing_rows = []
         for row in self.data:
             # Skip special rows - treat as comment, output as-is
-            if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['PKG_NUM'] == '-' or row['DIE_NUM'] == '-':
+            if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['DIE_NUM'] == '-':
                 continue
             d_num = row['DIE_NUM']
             p_num = row['PKG_NUM']
@@ -441,9 +623,9 @@ class Parser:
         start_idx = -1
         for i, row in enumerate(self.data):
             # Skip special rows
-            if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['PKG_NUM'] == '-' or row['DIE_NUM'] == '-':
+            if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['DIE_NUM'] == '-':
                 continue
-            if row['DIE_LOC'].upper() == 'L' and row['DIE_PIN_NAME'].upper() != 'NC' and row['DIE_NUM'] != '0':
+            if row['PKG_LOC'].upper() == 'L' and row['DIE_PIN_NAME'].upper() != 'NC' and row['DIE_NUM'] != '0':
                 start_idx = i
                 break
 
@@ -453,7 +635,7 @@ class Parser:
             orig_to_new = {}  # Map: original DIE_NUM -> new DIE_NUM (for duplicates)
             for row in ring_seq:
                 # Skip special rows
-                if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['PKG_NUM'] == '-' or row['DIE_NUM'] == '-':
+                if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['DIE_NUM'] == '-':
                     continue
                 if row['DIE_PIN_NAME'].upper() == 'NC' or row['DIE_NUM'] == '0':
                     row['DIE_NUM'] = '0'
@@ -552,7 +734,7 @@ class PDFGen:
             # Skip duplicate DIE_NUM (only show one APR pin for multiple wires to same point)
             die_num = row['DIE_NUM']
             if pname not in ('NC', 'DOWNBOUND') and die_num not in ('0', '-') and a_loc in apr_data_by_side:
-                if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['PKG_NUM'] == '-':
+                if row['PKG_NUM'].upper() == 'INNER_BOUND':
                     pass  # Skip
                 elif die_num in seen_apr_die_nums:
                     pass  # Skip duplicate
@@ -600,22 +782,8 @@ class PDFGen:
             p_pt = pkg_coords.get(row['PKG_NUM'])
             a_pt = apr_coords.get(row['DIE_NUM'])
             if p_pt and a_pt:
-                # Determine which side based on PIN_NUM location
-                pnum_str = row['PKG_NUM']
-                side = None
-                try:
-                    pnum_int = int(pnum_str)
-                    pkg_str = self.parser.header.get('PACKAGE', '64 16 16 16 16')
-                    pkg_parts = pkg_str.split()
-                    expected = {'L': int(pkg_parts[1]), 'B': int(pkg_parts[2]), 'R': int(pkg_parts[3]), 'T': int(pkg_parts[4])}
-                    cumulative = 0
-                    for s in ['L', 'B', 'R', 'T']:
-                        cumulative += expected[s]
-                        if pnum_int <= cumulative:
-                            side = s
-                            break
-                except:
-                    pass
+                # Determine which side based on PIN_NUM location (with ring offset)
+                side = self.parser._get_ring_side(row['PKG_NUM'])
 
                 wire_start = p_pt['pt']
 
@@ -810,7 +978,7 @@ class PDFGen:
             # Skip NC, DOWNBOUND, and DIE_PAD_NUM='0' for APR (no die pad to show)
             if pname in ('NC', 'DOWNBOUND') or row['DIE_NUM'] in ('0', '-'): continue
             # Skip Inner_bound and PKG_NUM='-'
-            if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['PKG_NUM'] == '-': continue
+            if row['PKG_NUM'].upper() == 'INNER_BOUND': continue
             # Skip duplicate DIE_NUM (only show one APR pin for multiple wires to same point)
             die_num = row['DIE_NUM']
             if die_num in seen_die_nums:
@@ -855,29 +1023,12 @@ class PDFGen:
             if pnum in ('0', '-'): continue
             if pnum not in pkg_data: pkg_data[pnum] = row.copy(); order.append(pnum)
         data_by_side = {'L': [], 'B': [], 'R': [], 'T': []}
-        # Build side mapping from PACKAGE definition (same logic as sanity check)
-        pkg_str = self.parser.header.get('PACKAGE', '64 16 16 16 16')
-        parts = pkg_str.split()
-        expected = {'L': int(parts[1]), 'B': int(parts[2]), 'R': int(parts[3]), 'T': int(parts[4])}
-
-        def get_side_from_pnum(pnum_str):
-            try:
-                p = int(pnum_str)
-                if p == 0: return None
-                cumulative = 0
-                for side in ['L', 'B', 'R', 'T']:
-                    cumulative += expected[side]
-                    if p <= cumulative: return side
-                return None
-            except (ValueError, TypeError):
-                return None
-
         for pnum in order:
             loc = pkg_data[pnum]['PKG_LOC'].upper()
             pname = pkg_data[pnum]['DIE_PIN_NAME'].upper()
             # For DOWNBOUND or pins with invalid LOCATION, infer side from PIN_NUM
             if pname == 'DOWNBOUND' or loc not in data_by_side:
-                inferred_side = get_side_from_pnum(pnum)
+                inferred_side = self.parser._get_ring_side(pnum)
                 if inferred_side:
                     data_by_side[inferred_side].append(pkg_data[pnum])
             elif loc in data_by_side:
@@ -909,7 +1060,12 @@ class PDFGen:
         if mode == 'PKG': font_size = min(font_size + 1, 10)
         box_len = 15 if mode == 'APR' else 25
         for idx, pin in enumerate(pins, 1):
-            pname = pin['DIE_PIN_NAME']; display_name = pname
+            if mode == 'PKG':
+                pkg_pin = pin.get('PKG_PIN_NAME', '-')
+                pname = pkg_pin if pkg_pin and pkg_pin != '-' else pin['DIE_PIN_NAME']
+            else:
+                pname = pin['DIE_PIN_NAME']
+            display_name = pname
             if '%' in pname: display_name = pname.split('%')[-1] if mode == 'APR' else pname.split('%')[0]
             px, py = 0, 0; bw, bh = 0, 0
             if side == 'L':
@@ -1113,7 +1269,7 @@ class PDFGen:
         step = edge / (f_max + 1); font_size = max(2, min(step * 0.9, 7)); spacing = font_size * 1.5
         c.setFont("Helvetica", font_size); c.setFillColor(colors.black)
         h = self.parser.header
-        c.drawCentredString(cx, cy + spacing, f"Project: {h.get('PRODUCTION NO.', 'N/A')}")
+        c.drawCentredString(cx, cy + spacing, f"Project: {h.get('PRODUCTION NO.', h.get('PRODUCTION NO', 'N/A'))}")
         c.drawCentredString(cx, cy, f"Package: {h.get('PACKAGE', 'N/A')}")
         c.drawCentredString(cx, cy - spacing, f"Version: {h.get('VERSION', 'N/A')}")
 
@@ -1174,6 +1330,9 @@ class Writer:
                     return v if v and v.strip() else '-'
 
                 for r in self.parser.data:
+                    # Skip empty rows (no PKG_NUM and no DIE_NUM)
+                    if norm(r['PKG_NUM']) == '-' and norm(r['DIE_NUM']) == '-':
+                        continue
                     row_str = f"{norm(r['PKG_NUM']):<8} {norm(r['PKG_PIN_NAME']):<12} {norm(r['DIE_NUM']):<12} {norm(r['DIE_PIN_NAME']):<20} {norm(r['IO_CELL_NAME']):<12} {norm(r['PKG_LOC']):<10} {norm(r['DIE_LOC']):<18} "
                     if len(h) > 7: row_str += f"{norm(r['DIRECTION']):<10} "
                     if len(h) > 8: row_str += f"{norm(r['LOAD']):<6} "
@@ -1191,6 +1350,9 @@ class Writer:
                  'IO_CELL_NAME', 'PKG_LOC', 'DIE_LOC', 'DIRECTION', 'LOAD', 'SLEW', 'SSO']
 
             with open(filename, 'w', newline='') as f:
+                for k, v in sorted(self.parser.header.items()):
+                    f.write(f"# {k} : {v}\n")
+                f.write("\n")
                 writer = csv.DictWriter(f, fieldnames=h)
                 writer.writeheader()
 
@@ -1198,6 +1360,8 @@ class Writer:
                     return v if v and v.strip() else '-'
 
                 for r in self.parser.data:
+                    if norm(r['PKG_NUM']) == '-' and norm(r['DIE_NUM']) == '-':
+                        continue
                     row = {field: norm(r[field]) for field in h}
                     writer.writerow(row)
         except Exception as e:
@@ -1280,13 +1444,13 @@ def main():
         try:
             with open(args.list, 'r') as f:
                 for line in f:
-                    match = re.search(r'PRODUCTION NO\.\s*:\s*(.*)', line, re.I)
+                    match = re.search(r'(?:PRODUCTION|PROJECT) NO\.?\s*:\s*([^,\n]+)', line, re.I)
                     if match:
                         proj_no = match.group(1).strip()
                         break
         except: pass
     
-    proj_no = re.sub(r'[^\w\-]', '_', proj_no)
+    proj_no = re.sub(r'[^\w\-]', '_', proj_no).rstrip(' _')
     
     out_dir = "."
     if args.outdir:
@@ -1322,8 +1486,9 @@ def main():
         w = Writer(logger, parser)
         w.generate_completed_list(f"{prefix}.new")
         w.generate_completed_csv(f"{prefix}.new.csv")
-        w.generate_innovus_io(f"{prefix}_chip.inn.const")
-        w.generate_icc2_io(f"{prefix}_chip.icc2.const")
+        if args.v:
+            w.generate_innovus_io(f"{prefix}_chip.inn.const")
+            w.generate_icc2_io(f"{prefix}_chip.icc2.const")
 
     if args.apr or args.pkg or args.combined:
         pg = PDFGen(logger, parser)
