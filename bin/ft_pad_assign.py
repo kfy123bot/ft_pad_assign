@@ -26,48 +26,59 @@ import datetime
 class Logger:
     def __init__(self, log_fn=None):
         self.log_fn = log_fn
+        self._fh = None
         if self.log_fn:
-            with open(self.log_fn, 'w') as f:
-                f.write(f"--- FT_PAD_ASSIGN Execution Log ({datetime.datetime.now()}) ---\n")
+            self._fh = open(self.log_fn, 'w')
+            self._fh.write(f"--- FT_PAD_ASSIGN Execution Log ({datetime.datetime.now()}) ---\n")
+            self._fh.flush()
+
+    def set_log_file(self, log_fn):
+        if self._fh:
+            self._fh.close()
+        self.log_fn = log_fn
+        self._fh = open(self.log_fn, 'w')
+        self._fh.write(f"--- FT_PAD_ASSIGN Execution Log ({datetime.datetime.now()}) ---\n")
+        self._fh.flush()
+
+    def _write(self, out):
+        print(out)
+        if self._fh:
+            self._fh.write(out + "\n")
+            self._fh.flush()
 
     def info(self, msg):
-        out = f"[INFO ] {msg}"
-        print(out)
-        if self.log_fn:
-            with open(self.log_fn, 'a') as f: f.write(out + "\n")
+        self._write(f"[INFO ] {msg}")
 
     def warn(self, msg):
-        out = f"[WARN ] {msg}"
-        print(out)
-        if self.log_fn:
-            with open(self.log_fn, 'a') as f: f.write(out + "\n")
+        self._write(f"[WARN ] {msg}")
 
     def error(self, msg):
-        out = f"[ERROR] {msg}"
-        print(out)
-        if self.log_fn:
-            with open(self.log_fn, 'a') as f: f.write(out + "\n")
+        self._write(f"[ERROR] {msg}")
 
     def fatal(self, msg):
-        out = f"[FATAL] {msg}"
-        print(out)
-        if self.log_fn:
-            with open(self.log_fn, 'a') as f: f.write(out + "\n")
+        self._write(f"[FATAL] {msg}")
+        if self._fh:
+            self._fh.close()
         sys.exit(1)
+
+    def close(self):
+        if self._fh:
+            self._fh.close()
+            self._fh = None
 
 # --- Field Alias Mapping (Header-Driven Parsing) ---
 FIELD_ALIASES = {
     'PKG_NUM':      ['PKG_NUM', 'PIN_NUM'],
-    'PKG_PIN_NAME': ['PKG_PIN_NAME'],
+    'PKG_PIN_NAME': ['PKG_PIN_NAME', 'PACKAGE_PIN', 'PKG_PIN'],
     'DIE_NUM':      ['DIE_NUM', 'DIE_PAD_NUM'],
     'DIE_PIN_NAME': ['DIE_PIN_NAME', 'PIN_NAME'],
-    'IO_CELL_NAME': ['IO_CELL_NAME'],
+    'IO_CELL_NAME': ['IO_CELL_NAME', 'CELL_NAME', 'IO_CELL', 'IOCELL'],
     'PKG_LOC':      ['PKG_LOC', 'LOCATION', 'PIN_LOCA'],
     'DIE_LOC':      ['DIE_LOC', 'DIE_PAD_NUM_LOC', 'DIE_LOCA'],
-    'DIRECTION':    ['DIRECTION'],
-    'LOAD':         ['LOAD'],
-    'SLEW':         ['SLEW'],
-    'SSO':          ['SSO'],
+    'DIRECTION':    ['DIRECTION', 'IO_DIRECTION', 'IO_TYPE', 'DIR'],
+    'LOAD':         ['LOAD', 'CAP', 'CAPACITANCE'],
+    'SLEW':         ['SLEW', 'TRANSITION', 'SLEW_RATE'],
+    'SSO':          ['SSO', 'SSO_RATIO'],
 }
 
 # --- Parser Class ---
@@ -103,6 +114,8 @@ class Parser:
             self._sanity_check_list()
             self._reorder_and_reindex_apr_data()
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             self.logger.fatal(f"Error parsing list: {e}")
 
     def _parse_csv(self, f):
@@ -110,7 +123,6 @@ class Parser:
         lines = f.readlines()
 
         # Skip header lines (lines containing ':' which are metadata)
-        data_start = 0
         header_idx = -1
         for i, line in enumerate(lines):
             stripped = line.strip()
@@ -126,7 +138,6 @@ class Parser:
                     if key == 'PROJECT NO':
                         key = 'PRODUCTION NO'
                     self.header[key] = value
-                data_start = i + 1
             else:
                 # Alias-aware header detection: check if any PKG_NUM alias appears in the header
                 words = set(w.upper() for w in stripped.split(','))
@@ -134,10 +145,12 @@ class Parser:
                     # CSV header row
                     self.raw_headers = stripped.split(',')
                     header_idx = i
-                    data_start = i + 1
                     break
 
         # Parse CSV data - include header row for DictReader
+        if header_idx == -1:
+            self.logger.error("CSV header row with PKG_NUM/PIN_NUM not found. Cannot parse data.")
+            return
         csv_content = ''.join(lines[header_idx:])
         reader = csv.DictReader(io.StringIO(csv_content))
         for row in reader:
@@ -286,6 +299,8 @@ class Parser:
                 start_idx = i
                 break
 
+        if start_idx == -1:
+            self.logger.warn("No L-side signal pin found, DIE_NUM reindexing skipped.")
         if start_idx != -1:
             ring_seq = self.data[start_idx:] + self.data[:start_idx]
             idx = 1
@@ -317,6 +332,8 @@ class Parser:
                 new_pnum = re.sub(r'D1\.\d+', f'D1.{new_val}', orig_pnum, flags=re.I)
                 ref_row['PKG_NUM'] = new_pnum
                 self.logger.info(f"Updated Dynamic Reference: {orig_pnum} -> {new_pnum} (Target was DIE_NUM {target_xx})")
+            else:
+                self.logger.warn(f"D1.xx reference target DIE_NUM={target_xx} not found in reindex map, skipped.")
 
     def _sanity_check_list(self):
         self.logger.info("Performing Sanity Check on Pin List...")
@@ -354,7 +371,7 @@ class Parser:
             # Sort the found pin numbers for cleaner logging
             def pnum_key(x):
                 try: return (0, int(x))
-                except: return (1, x)
+                except (ValueError, TypeError): return (1, x)
             pnums_found = sorted(list(actual_pnums[side]), key=pnum_key)
 
             act_cnt = len(pnums_found)
@@ -591,9 +608,12 @@ class Parser:
                     for p in [x.strip() for x in m.group(2).split(',')]:
                         self.v_ports[p] = direction
                 # Instances
+                _VERILOG_KEYWORDS = {'module', 'function', 'task', 'input', 'output', 'inout', 'reg', 'wire', 'parameter'}
                 im = re.finditer(r'(\w+)\s+(\w+)\s*\((.*?)\);', content, re.S)
                 for m in im:
                     cell, inst, body = m.groups()
+                    if cell.lower() in _VERILOG_KEYWORDS:
+                        continue
                     self.v_raw_insts[inst] = cell
                     pad_m = re.search(r'\.PAD\s*\(\s*(.*?)\s*\)', body, re.S)
                     if pad_m:
@@ -631,6 +651,8 @@ class Parser:
                 start_idx = i
                 break
 
+        if start_idx == -1:
+            self.logger.warn("No L-side signal pin found, DIE_NUM reindexing skipped.")
         if start_idx != -1:
             ring_seq = self.data[start_idx:] + self.data[:start_idx]
             idx = 1
@@ -670,7 +692,9 @@ class Parser:
             
             # Use sn for lookup, handle power/group segments
             sn = pname
-            if '%' in pname: sn = pname.split('%')[-1]
+            if '%' in pname:
+                sn = pname.split('%')[-1]
+                if not sn: sn = pname
             
             p_mode = (row['DIRECTION'] in ('P', 'G') or '%' in pname or 'POWERCUT' in pname_upper)
             
@@ -724,7 +748,7 @@ class PDFGen:
             # PKG side (Uses current PIN_NUM order)
             # DOWNBOUND should be included in PKG (even though DIE_NUM=0)
             if p_loc in pkg_data_by_side:
-                if pname != 'DOWNBOUND' and pnum in ('0', '-', 'NC') or 'POWERCUT' in pname: pass
+                if (pname != 'DOWNBOUND' and pnum in ('0', '-', 'NC')) or 'POWERCUT' in pname: pass
                 else:
                     if pnum not in seen_pnums:
                         pkg_data_by_side[p_loc].append(row)
@@ -763,7 +787,6 @@ class PDFGen:
 
         pkg_coords, apr_coords = {}, {}
         pkg_edge = {'L': cx - edge_pkg/2, 'R': cx + edge_pkg/2, 'B': cy - edge_pkg/2, 'T': cy + edge_pkg/2}
-        page_lim = {'L': 30, 'R': width - 30, 'B': 30, 'T': 510}
         pkg_margin = 8
         pkg_lim = {'L': pkg_edge['L'] + pkg_margin, 'R': pkg_edge['R'] - pkg_margin,
                    'B': pkg_edge['B'] + pkg_margin, 'T': pkg_edge['T'] - pkg_margin}
@@ -827,7 +850,7 @@ class PDFGen:
                     continue
                 # Remove parentheses if present, extract xx
                 pnum_clean = pnum.lstrip('(').rstrip(')')
-                xx = pnum_clean.split('.')[1].rstrip(')')
+                xx = pnum_clean.split('.')[1]
                 # D1.xx, DIE_NUM=yy means xx -> yy (both with and without parentheses)
                 source, dest = xx, die_yy
                 key = (source, dest)
@@ -836,12 +859,10 @@ class PDFGen:
                 direction_map[key].append(row)
 
             # Check for asymmetric connections
-            asymmetric_pairs = []
             for (a, b), rows in direction_map.items():
                 reverse_key = (b, a)
                 if reverse_key not in direction_map:
                     # Asymmetric: a->b exists but b->a missing
-                    asymmetric_pairs.append((a, b))
                     self.logger.error(f"Inner Bound ASYMMETRIC: {a}->{b} exists but {b}->{a} missing!")
 
             drawn_extended_pins = set()
@@ -1068,7 +1089,9 @@ class PDFGen:
             else:
                 pname = pin['DIE_PIN_NAME']
             display_name = pname
-            if '%' in pname: display_name = pname.split('%')[-1] if mode == 'APR' else pname.split('%')[0]
+            if '%' in pname:
+                display_name = pname.split('%')[-1] if mode == 'APR' else pname.split('%')[0]
+                if not display_name: display_name = pname
             px, py = 0, 0; bw, bh = 0, 0
             if side == 'L':
                 bw, bh = box_len, box_thickness; px = bx - (0 if label_inside else bw); py = (by + length/2) - (idx * step) - (bh/2)
@@ -1281,16 +1304,15 @@ class Checker:
         self.logger = logger
         self.parser = parser
 
-    def check_stagger(self, filename):
+    def check_stagger(self, filename, max_io=8):
         self.logger.info("Running Stagger Density Check...")
         try:
             with open(filename, 'w') as f:
                 f.write("STAGGER DENSITY CHECK REPORT\n")
                 f.write("=" * 30 + "\n")
                 io_count = 0
-                max_io = 8
                 for row in self.parser.data:
-                    if row['DIRECTION'] in ('I', 'O', 'B'):
+                    if row['DIRECTION'] in ('I', 'O', 'B', 'IO'):
                         io_count += 1
                         if io_count > max_io:
                             msg = f"[WARN] Consecutive I/O at Pin {row['PKG_NUM']} ({row['DIE_PIN_NAME']})"
@@ -1430,9 +1452,12 @@ def main():
     p.add_argument("-combined", action="store_true", help="Combined Diagram with wires")
     p.add_argument("-c", action="store_true", help="Generate .new and .const files")
     p.add_argument("-stagger", action="store_true", help="Stagger check")
+    p.add_argument("-stagger-max", type=int, default=8, help="Max consecutive I/O pins before warning (default: 8)")
     p.add_argument("-all", action="store_true", help="All functions")
     p.add_argument("-o", "--outdir", default=".", help="Output folder (default: current directory)")
     args = p.parse_args()
+    if args.v is not None and len(args.v) == 0:
+        args.v = None
 
     if args.all: args.apr = args.pkg = args.combined = args.c = args.stagger = True
 
@@ -1450,9 +1475,10 @@ def main():
                     if match:
                         proj_no = match.group(1).strip()
                         break
-        except: pass
+        except Exception: pass
     
     proj_no = re.sub(r'[^\w\-]', '_', proj_no).rstrip(' _')
+    if not proj_no: proj_no = "fpad_out"
     
     out_dir = "."
     if args.outdir:
@@ -1463,10 +1489,7 @@ def main():
 
     # 3. Setup final log file location
     log_path = os.path.join(out_dir, f"{proj_no}.log")
-    logger.log_fn = log_path
-    with open(log_path, 'w') as f:
-        f.write(f"--- FT_PAD_ASSIGN Execution Log ({datetime.datetime.now()}) ---\n")
-        f.write(f"Project: {proj_no}\n")
+    logger.set_log_file(log_path)
     logger.info(f"Log file initialized: {log_path}")
 
     # 4. Now run the full parsing and check
@@ -1482,7 +1505,7 @@ def main():
     prefix = os.path.join(out_dir, proj_no)
 
     if args.stagger:
-        Checker(logger, parser).check_stagger(f"{prefix}_stagger.rpt")
+        Checker(logger, parser).check_stagger(f"{prefix}_stagger.rpt", max_io=args.stagger_max)
     
     if args.c:
         w = Writer(logger, parser)
@@ -1499,6 +1522,7 @@ def main():
         if args.combined: pg.generate_combined_pdf(f"{prefix}_combined.pdf")
 
     logger.info("Execution successful.")
+    logger.close()
 
 if __name__ == "__main__":
     main()
