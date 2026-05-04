@@ -84,11 +84,11 @@ PKG_NUM  DIE_NUM  PIN_NAME  IO_CELL_NAME  PKG_LOC  DIE_LOC  DIRECTION  LOAD  SLE
 | `PIN_NUM='0'` 或 `'-'` | **跳過** (不顯示) | - | - | PKG 無效腳位 |
 | `DIE_PAD_NUM='0'` 或 `'-'` | - | **跳過** | **跳過** (無 APR pin) | APR 無效腳位 |
 | `PIN_NAME=NC` | **顯示** (黑色方塊) | **跳過** | **跳過** | 無連接 |
-| `PIN_NAME=DOWNBOUND` | **顯示** (藍色方塊) | **跳過** | **跳過** | 接地/bonding 端點 |
+| `PIN_NAME=DOWNBOND` | **顯示** (藍色方塊) | **跳過** | **跳過** | 接地/bonding 端點 |
 | `PIN_NAME=POWERCUT` | **跳過** (不顯示) | **顯示** (黑色方塊) | - | Power cut |
-| `PIN_NUM='D1.xx'` | 不顯示 | 不顯示 | **延伸 APR pin 並用紅線連接** | Inner bound 連接 |
+| `PIN_NUM='D1.xx'` | 不顯示 | 不顯示 | **延伸 APR pin 並用紅線連接** | Inner bond 連接 |
 
-### Inner Bound (D1.xx) 處理
+### Inner Bond (D1.xx) 處理
 
 **核心規則**：xx 和 yy 都代表 DIE_NUM（晶粒墊片編號）
 
@@ -147,7 +147,7 @@ PKG_NUM  DIE_NUM  PIN_NAME  IO_CELL_NAME  PKG_LOC  DIE_LOC  DIRECTION  LOAD  SLE
 | PKG 黑色方塊 | `_draw_side_boxes()` | 616-620 |
 | APR 跳過 | `generate_apr_pdf()` | 519 |
 | D1.xx 識別 | `generate_combined_pdf()` | 444-446 |
-| Inner bound 連接邏輯 | `generate_combined_pdf()` | 514-583 |
+| Inner bond 連接邏輯 | `generate_combined_pdf()` | 514-583 |
 | 座標延伸計算 | `_extend_point_toward_center()` | 789-800 |
 | **Pin 延伸繪製（關鍵）** | **`_draw_extended_pin()`** | **802-832** |
 | 合唱線繪製 | `generate_combined_pdf()` | 581-582 |
@@ -167,7 +167,7 @@ PKG_NUM  DIE_NUM  PIN_NAME  IO_CELL_NAME  PKG_LOC  DIE_LOC  DIRECTION  LOAD  SLE
 - APR: 跳過不顯示
 - Wire: 不繪製
 
-### DOWNBOUND
+### DOWNBOND
 - PKG: 藍色方塊顯示
 - APR: 跳過不顯示
 - Wire: 不繪製
@@ -223,7 +223,7 @@ Use `label_inside=False` to place APR pins at outer edge of APR frame (outside t
 ## Sanity Check
 Validates pin count per side matches PACKAGE header:
 - Counts unique PKG_NUM per side
-- DOWNBOUND PKG_NUM is included in count
+- DOWNBOND PKG_NUM is included in count
 - Total must equal sum of L+B+R+T from PACKAGE header
 
 ## CSV Parsing Notes
@@ -247,7 +247,7 @@ python3 bin/ft_pad_assign.py -list <pin_list_file> -o <output_folder> -all
 | `_sanity_check()` | ~220 | 腳位數量驗證 |
 | `generate_apr_pdf()` | ~588 | APR PDF 生成 |
 | `generate_pkg_pdf()` | ~623 | PKG PDF 生成 |
-| `generate_combined_pdf()` | ~399 | Combined PDF + Inner bound |
+| `generate_combined_pdf()` | ~399 | Combined PDF + Inner bond |
 | `_draw_side_boxes()` | ~683 | 繪製框架邊緣腳位 |
 | `_extend_point_toward_center()` | ~789 | 座標向中心延伸 |
 | **`_draw_extended_pin()`** | **~802** | **延伸 pin 形狀繪製（B/T 寬度 80%）** |
@@ -281,7 +281,7 @@ Internal field names use `DIE_PAD_NUM` (not `DIE_NUM`), regardless of input form
 
 ## 修改歷史（2026-04-23）
 
-### Inner Bound Pin 延伸修正
+### Inner Bond Pin 延伸修正
 
 **問題 1：B/T side 方向反向**
 - 修正前：B side 向下延伸，T side 向上延伸
@@ -481,9 +481,9 @@ python3 bin/ft_pad_assign.py -list examples/qfn48.8028.pin_list.csv -o test_comb
 
 ---
 
-## 修改歷史（2026-04-24）— Inner Bound 對稱性檢查與多重線
+## 修改歷史（2026-04-24）— Inner Bond 對稱性檢查與多重線
 
-### Inner Bound 對稱性規則
+### Inner Bond 對稱性規則
 
 **核心配對邏輯**：
 - `PKG_NUM=D1.90, DIE_NUM=1` 與 `PKG_NUM=D1.1, DIE_NUM=90` 是一對
@@ -503,7 +503,7 @@ D1.1 + DIE_NUM=90  → source=1, dest=90
 90→1 存在，且 1→90 也存在 → Symmetric → 實線
 ```
 
-### Inner Bound 多重線偏移規則
+### Inner Bond 多重線偏移規則
 
 當同一個 (source, dest) 組合出現多次時，繪製多條平行線：
 
@@ -528,7 +528,7 @@ offset = (i - (count - 1) / 2) * 2
 
 | 功能 | 函數 | 行號 |
 |------|------|------|
-| Inner Bound 分組收集 | `generate_combined_pdf()` | ~638-670 |
+| Inner Bond 分組收集 | `generate_combined_pdf()` | ~638-670 |
 | 對稱性判斷 | `generate_combined_pdf()` | ~711-713 |
 | 多重線繪製 | `generate_combined_pdf()` | ~715-743 |
 
@@ -558,11 +558,11 @@ for i in range(count):
 
 ---
 
-## 修改歷史（2026-04-24）— DOWNBOUND 接地符號
+## 修改歷史（2026-04-24）— DOWNBOND 接地符號
 
-### DOWNBOUND 處理規則
+### DOWNBOND 處理規則
 
-當 `DIE_PIN_NAME=DOWNBOUND` 時表示此封裝有 Downbound 方式。
+當 `DIE_PIN_NAME=DOWNBOND` 時表示此封裝有 Downbond 方式。
 
 **接地線條件**：
 - `PKG_NUM=0`
@@ -648,13 +648,13 @@ cx, cy = width / 2, 265  # 原本是 240
 
 ## 完整驗證清單
 
-### Inner Bound 驗證
+### Inner Bond 驗證
 - [ ] Symmetric 配對：90↔1, 75↔40 → 實線
 - [ ] Asymmetric 單向：只有 A→B → 虛線 + ERROR
 - [ ] 多重線：count=2 → 2條平行線（偏移 ±2）
 - [ ] 多重線：count=3 → 3條平行線（偏移 -4, 0, +4）
 
-### DOWNBOUND 驗證
+### DOWNBOND 驗證
 - [ ] PKG_NUM=0, DIRECTION=G → 接地符號
 - [ ] 多重接地：count=3 → 3條平行接地線
 - [ ] 接地符號方向正確（L←, R→, B↓, T↑）
@@ -738,9 +738,98 @@ Header regex 接受 `PRODUCTION NO`、`PRODUCTION NO.`、`PROJECT NO`、`PROJECT
 | `_reindex_pkg_num()` | Parser | PKG_NUM 從 1 重編 |
 | `_reassign_pkg_loc()` | Parser | 全部重算 PKG_LOC（取代 `_auto_fill_pkg_loc`） |
 | `_reassign_die_loc()` | Parser | DIE_LOC 跟隨 PKG_LOC 模式 |
+| `_parse_die_size()` | Parser | 解析 DIE_SIZE 標頭（AxB 格式，um） |
+| `_get_package_body_mm()` | PDFGen | 從 PACKAGE 查表得 body size（mm） |
+| `_compute_frame_dimensions()` | PDFGen | 計算 APR/PKG 框的實際尺寸（支援矩形） |
+| `_side_length()` | PDFGen | 根據 side 回傳對應的 edge 長度 |
 
 ### 執行順序（parse_list）
 
 ```
-_ring_shift_data → _reindex_pkg_num → _reassign_pkg_loc → _reassign_die_loc → _sanity_check_list → _reorder_and_reindex_apr_data
+_ring_shift_data → _reindex_pkg_num → _reassign_pkg_loc → _reassign_die_loc → _sanity_check_list → _reorder_and_reindex_apr_data → _parse_die_size
+```
+
+---
+
+## 修改歷史（2026-05-04）— DIE_SIZE 標頭與框架比例縮放
+
+### 功能概述
+
+新增 `DIE_SIZE : AxB` 標頭（um 單位，A=x 寬，B=y 高），根據封裝 body size 和 die size 的比例自動縮放 PDF 框架。
+
+### 新增標頭格式
+
+```
+DIE_SIZE : 2500x2000,,,,,,,,,,,,
+```
+
+- A = die x 軸寬度（um）
+- B = die y 軸高度（um）
+- A 和 B 可以不同（支援長方形 die）
+
+### QFN 封裝 Body Size 查找表
+
+```python
+QFN_BODY_SIZES = {
+    16: 3, 20: 3, 24: 4, 28: 4, 32: 5, 36: 5,
+    40: 6, 44: 6, 48: 7, 52: 7, 56: 8,
+    64: 9, 68: 9, 72: 10, 76: 10, 88: 12, 100: 12,
+}
+```
+
+預設為 0.5mm pitch。0.4mm pitch 由 DIE_SIZE 自動推斷（當 die 大於標準 body size 時警告）。
+
+### 框架縮放邏輯
+
+| 情境 | APR 框 | PKG 框 |
+|------|--------|--------|
+| 有 DIE_SIZE | 長方形（保持 die aspect ratio，fit 在原始正方形內） | 正方形（根據 package body / die 比例縮放） |
+| 無 DIE_SIZE | 正方形（280 / 200） | 正方形（280 / 350） |
+
+**Combined PDF 範例**（DIE_SIZE=2500x2000, QFN48=7x7mm）：
+- die ratio = 2500/2000 = 1.25
+- APR 框 = 200 x 160（fit 在 200x200 正方形內）
+- PKG 框 = 350 x 350（正方形，按比例縮放）
+
+### 代碼修改位置
+
+| 功能 | 位置 | 說明 |
+|------|------|------|
+| QFN_BODY_SIZES | 模組級常數 | pin_count → body_size_mm 查找表 |
+| `_parse_csv()` regex | ~line 142 | 加入 `DIE_SIZE` 到 alternation group |
+| `_parse_txt()` regex | ~line 217 | 同上 |
+| `_parse_die_size()` | Parser class | 解析 `AxB` 格式，存入 `self.die_size` |
+| `_get_package_body_mm()` | PDFGen class | 從 PACKAGE 欄位查表得 body size |
+| `_compute_frame_dimensions()` | PDFGen class | 核心縮放邏輯：(apr_x, apr_y, pkg_x, pkg_y) |
+| `_side_length()` | PDFGen class | L/R 用 edge_y，B/T 用 edge_x |
+| `_L_pos`/`_B_pos`/`_R_pos`/`_T_pos` | PDFGen class | 支援 edge_x, edge_y 矩形 |
+| `_draw_header()` | PDFGen class | 顯示 DIE_SIZE（如果有） |
+| `_draw_scale_bar()` | PDFGen class | 右下角比例尺（顯示 pkg/die 物理尺寸） |
+| CSV header check | ~line 140 | `startswith('D1')` 改為排除 `D1` 而非 `D` |
+
+### 向後相容性
+
+- `DIE_SIZE` 為可選欄位，不影響現有 pin list
+- 無 DIE_SIZE 時所有輸出與修改前完全相同
+- Position helpers 的 `edge_y=None` 預設為 `edge_x`
+
+### 比例尺（Scale Bar）
+
+每個 PDF 右下角顯示比例尺，方便得知 pkg/die 的實際物理尺寸。
+
+**顯示內容**：
+- 比例尺線段 + 刻度（自動選擇 0.5/1/2/5/10 mm 的合適長度）
+- `PKG: 7x7 mm` — 封裝 body size
+- `Die: 2500x2000 um` — 晶粒尺寸（有 DIE_SIZE 時才顯示）
+
+**縮放計算**：
+- scale = frame_pts / physical_um
+- 比例尺長度自動選擇 30-120 pts 範圍內的 round mm 值
+
+**代碼位置**：`_draw_scale_bar()` ~line 1384
+
+### 執行順序（parse_list）
+
+```
+_ring_shift_data → _reindex_pkg_num → _reassign_pkg_loc → _reassign_die_loc → _sanity_check_list → _reorder_and_reindex_apr_data → _parse_die_size
 ```

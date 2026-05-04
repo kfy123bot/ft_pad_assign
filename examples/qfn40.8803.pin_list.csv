@@ -1,50 +1,53 @@
-PRODUCTION NO  : PRJ8803_QFN40_TEST,,,,,,,,,,
+PRODUCTION NO  : PRJ8803_QFN40,,,,,,,,,,
 PKG_TOP_LEFT_PIN : 1,,,,,,,,,,
 PACKAGE : 40QFN 10 10 10 10,,,,,,,,,,
 VERSION : V1.0_20260428,,,,,,,,,,
+DIE_SIZE : 4000x3500,,,,,,,,,,
 ,,,,,,,,,,
 PKG_NUM,PKG_PIN_NAME,DIE_NUM,DIE_PIN_NAME,IO_CELL_NAME,PKG_LOC,DIE_LOC,DIRECTION,LOAD,SLEW,SSO
 1,VDD33_ANA,1,,-,L,L,P,,,
-2,MIPI_CSI_RX_L0P,2,MIPI_CSI_RX_L0P,-,L,L,,,,
-3,MIPI_CSI_RX_L0N,3,MIPI_CSI_RX_L0N,-,L,L,,,,
-4,MIPI_CSI_RX_L1P,4,MIPI_CSI_RX_L1P,-,L,L,,,,
-5,MIPI_CSI_RX_L1N,5,MIPI_CSI_RX_L1N,-,L,L,,,,
-6,MIPI_CSI_RX_CLKP,6,MIPI_CSI_RX_CLKP,-,L,L,,,,
-7,MIPI_CSI_RX_CLKN,7,MIPI_CSI_RX_CLKN,-,L,L,,,,
+2,MIPI_CSI_RX_L0P,2,MIPI_CSI_RX_L0P,-,L,L,,,,MIPI
+3,MIPI_CSI_RX_L0N,3,MIPI_CSI_RX_L0N,-,L,L,,,,MIPI
+4,MIPI_CSI_RX_L1P,4,MIPI_CSI_RX_L1P,-,L,L,,,,MIPI
+5,MIPI_CSI_RX_L1N,5,MIPI_CSI_RX_L1N,-,L,L,,,,MIPI
+6,MIPI_CSI_RX_CLKP,6,MIPI_CSI_RX_CLKP,-,L,L,,,,MIPI
+7,MIPI_CSI_RX_CLKN,7,MIPI_CSI_RX_CLKN,-,L,L,,,,MIPI
 8,VDD11,8,,-,L,L,P,,,
 9,VDD33,9,,-,L,L,P,,,
 10,BOOT0_PIO_0,10,PIO_0,-,L,L,,,,
 11,BOOT1_PIO_1,11,PIO_1,-,B,L,,,,
 12,BOOT2_PIO_2,12,PIO_2,-,B,L,,,,
-13,TEST,13,TEST,-,B,L,,,,
-14,RESETN,14,RESETN,-,B,L,,,,
-15,LDO_EN,15,LDO_EN,-,B,B,,,,
+13,TEST,13,TEST,-,B,B,,,,
+14,RESETN,14,RESETN,-,B,B,,,,
+15,LDO_EN,15,LDO_EN,-,B,B,,,,LDO
 16,PIO_3,16,PIO_3,-,B,B,,,,
 17,PIO_4,17,PIO_4,-,B,B,,,,
 18,PIO_5,18,PIO_5,-,B,B,,,,
 19,PIO_6,19,PIO_6,-,B,B,,,,
 0,,20,,-,,B,,,,
-0,,21,VBAT_PIO_0,-,,B,,,,
-0,,22,VBAT_PIO_1,-,,B,,,,
-0,,23,VBAT_PIO_2,-,,B,,,,
-0,,24,VBAT_PIO_3,-,,B,,,,
-0,,25,VBAT_PIO_4,-,,B,,,,
-0,,26,VBAT_PIO_5,-,,B,,,,
-0,,27,VBAT_PIO_6,-,,B,,,,
-0,,28,VBAT_PIO_7,-,,B,,,,
-0,,29,VBAT_PIO_8,-,,B,,,,
+0,,21,VBAT_PIO_0,-,,B,,,,RTC
+0,,22,VBAT_PIO_1,-,,B,,,,RTC
+0,,23,VBAT_PIO_2,-,,B,,,,RTC
+0,,24,VBAT_PIO_3,-,,B,,,,RTC
+0,,25,VBAT_PIO_4,-,,B,,,,RTC
+0,,26,VBAT_PIO_5,-,,B,,,,RTC
+0,,27,VBAT_PIO_6,-,,B,,,,RTC
+0,,28,VBAT_PIO_7,-,,B,,,,RTC
+0,,28.1,LEXT_IN,,,B,,,,RTC
+0,,28.2,LEXT_OUT,,,B,,,,RTC
+0,,29,VBAT_PIO_8,-,,B,,,,RTC
 0,,30,,-,,B,,,,
-0,,31,PSR_CE,-,,B,,,,
-0,,32,PSR_CK,-,,B,,,,
-0,,33,PSR_DQS,-,,B,,,,
-0,,34,PSR_DQ0,-,,R,,,,
-0,,35,PSR_DQ1,-,,R,,,,
-0,,36,PSR_DQ2,-,,R,,,,
-0,,37,PSR_DQ3,-,,R,,,,
-0,,38,PSR_DQ4,-,,R,,,,
-0,,39,PSR_DQ5,-,,R,,,,
-0,,40,PSR_DQ6,-,,R,,,,
-0,,41,PSR_DQ7,-,,R,,,,
+0,,31,PSR_CE,-,,R,,,,A_PHY
+0,,32,PSR_CK,-,,R,,,,A_PHY
+0,,33,PSR_DQS,-,,R,,,,A_PHY
+0,,34,PSR_DQ0,-,,R,,,,A_PHY
+0,,35,PSR_DQ1,-,,R,,,,A_PHY
+0,,36,PSR_DQ2,-,,R,,,,A_PHY
+0,,37,PSR_DQ3,-,,R,,,,A_PHY
+0,,38,PSR_DQ4,-,,R,,,,A_PHY
+0,,39,PSR_DQ5,-,,R,,,,A_PHY
+0,,40,PSR_DQ6,-,,R,,,,A_PHY
+0,,41,PSR_DQ7,-,,R,,,,A_PHY
 0,,42,PIO_7,-,,R,,,,
 0,,43,PIO_8,-,,R,,,,
 0,,44,PIO_9,-,,R,,,,
@@ -56,14 +59,14 @@ PKG_NUM,PKG_PIN_NAME,DIE_NUM,DIE_PIN_NAME,IO_CELL_NAME,PKG_LOC,DIE_LOC,DIRECTION
 0,,50,PIO_15,-,,R,,,,
 0,,51,PIO_16,-,,R,,,,
 0,,52,PIO_17,-,,R,,,,
-21,PIO_8,53,PIO_18,-,R,R,,,,
-22,PIO_9,54,PIO_19,-,R,R,,,,
-23,LOUT,55,LOUT,-,R,R,,,,
-24,VMID,56,VMID,-,R,R,,,,
-25,VDD33_DAC,57,VDD33_DAC,-,R,R,P,,,
-26,MICBIAS,58,MICBIAS,-,R,R,,,,
-27,MICIN,59,MICIN,-,R,T,,,,
-28,AGND,60,AGND,-,R,T,G,,,
+23,LOUT,55,LOUT,-,R,R,,,,AUDIO_CODEC
+24,VMID,56,VMID,-,R,R,,,,AUDIO_CODEC
+25,VDD33_DAC,57,VDD33_DAC,-,R,R,P,,,AUDIO_CODEC
+26,MICBIAS,58,MICBIAS,-,R,R,,,,AUDIO_CODEC
+27,MICIN,59,MICIN,-,R,R,,,,AUDIO_CODEC
+28,AGND,60,AGND,-,R,R,G,,,AUDIO_CODEC
+21,PIO_8,53,PIO_18,-,R,T,,,,
+22,PIO_9,54,PIO_19,-,R,T,,,,
 29,PIO_10,61,PIO_20,-,R,T,,,,
 30,PIO_11,62,PIO_21,-,R,T,,,,
 31,PIO_12,63,PIO_22,-,T,T,,,,
@@ -134,11 +137,11 @@ PKG_NUM,PKG_PIN_NAME,DIE_NUM,DIE_PIN_NAME,IO_CELL_NAME,PKG_LOC,DIE_LOC,DIRECTION
 ,,,,,,,,,,
 ,,,,,,,,,,
 ,,,,,,,,,,
-Inner_bound,,1,I0 (X.Y),I1 (X.Y),,,,,,
-Inner_bound,,2,I2 (X.Y),(X.Y),,,,,,
-Inner_bound,,3,(X.Y),(X.Y),,,,,,
-Inner_bound,,4,(X.Y),(X.Y),,,,,,
-Inner_bound,,5,(X.Y),(X.Y),,,,,,
-Inner_bound,,6,(X.Y),(X.Y),,,,,,
-Inner_bound,,7,(X.Y),(X.Y),,,,,,
-Inner_bound,,8,(X.Y),(X.Y),,,,,,
+Inner_bond,,1,I0 (X.Y),I1 (X.Y),,,,,,
+Inner_bond,,2,I2 (X.Y),(X.Y),,,,,,
+Inner_bond,,3,(X.Y),(X.Y),,,,,,
+Inner_bond,,4,(X.Y),(X.Y),,,,,,
+Inner_bond,,5,(X.Y),(X.Y),,,,,,
+Inner_bond,,6,(X.Y),(X.Y),,,,,,
+Inner_bond,,7,(X.Y),(X.Y),,,,,,
+Inner_bond,,8,(X.Y),(X.Y),,,,,,

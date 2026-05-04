@@ -81,6 +81,13 @@ FIELD_ALIASES = {
     'SSO':          ['SSO', 'SSO_RATIO'],
 }
 
+# --- Package Body Size Lookup (mm, 0.5mm pitch default) ---
+QFN_BODY_SIZES = {
+    16: 3, 20: 3, 24: 4, 28: 4, 32: 5, 36: 5,
+    40: 6, 44: 6, 48: 7, 52: 7, 56: 8,
+    64: 9, 68: 9, 72: 10, 76: 10, 88: 12, 100: 12,
+}
+
 # --- Parser Class ---
 class Parser:
     def __init__(self, logger, list_file, v_files=None):
@@ -113,6 +120,7 @@ class Parser:
             self._reassign_die_loc()
             self._sanity_check_list()
             self._reorder_and_reindex_apr_data()
+            self._parse_die_size()
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -129,9 +137,9 @@ class Parser:
             if not stripped:
                 continue
             # If line has ':' in first column and doesn't look like CSV data, it's a header
-            if ':' in stripped and not stripped.startswith(('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '(', 'D')):
+            if ':' in stripped and not stripped.startswith(('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '(', 'D1')):
                 # Parse header line (handle CSV format with commas like "PACKAGE,,: value")
-                match = re.search(r'^(PRODUCTION NO\.?|PROJECT NO\.?|PKG_TOP_LEFT_PIN|PACKAGE|VERSION)[,\s]*:\s*(.*)', stripped, re.I)
+                match = re.search(r'^(PRODUCTION NO\.?|PROJECT NO\.?|PKG_TOP_LEFT_PIN|PACKAGE|VERSION|DIE_SIZE)[,\s]*:\s*(.*)', stripped, re.I)
                 if match:
                     value = match.group(2).strip().rstrip(',')
                     key = match.group(1).upper().rstrip('.')
@@ -164,9 +172,9 @@ class Parser:
                         return val if val != '' else '-'
                 return '-'
 
-            # Skip Inner_bound rows - treat as comment, output as-is
+            # Skip Inner_bond rows - treat as comment, output as-is
             pkg_num_val = get_field('PKG_NUM')
-            if pkg_num_val.upper() == 'INNER_BOUND':
+            if pkg_num_val.upper() == 'INNER_BOND':
                 row_data = {
                     'PKG_NUM':      pkg_num_val,
                     'PKG_PIN_NAME': get_field('PKG_PIN_NAME'),
@@ -206,7 +214,7 @@ class Parser:
         for line in f:
             line = line.strip()
             if not line or re.match(r'^-+$', line): continue
-            match = re.search(r'^(PRODUCTION NO\.?|PROJECT NO\.?|PKG_TOP_LEFT_PIN|PACKAGE|VERSION)\s*:\s*(.*)', line, re.I)
+            match = re.search(r'^(PRODUCTION NO\.?|PROJECT NO\.?|PKG_TOP_LEFT_PIN|PACKAGE|VERSION|DIE_SIZE)\s*:\s*(.*)', line, re.I)
             if match:
                 key = match.group(1).upper().rstrip('.')
                 if key == 'PROJECT NO':
@@ -231,9 +239,9 @@ class Parser:
                                 return v if v.strip() else '-'
                         return '-'
 
-                    # Skip Inner_bound rows - treat as comment, output as-is
+                    # Skip Inner_bond rows - treat as comment, output as-is
                     pkg_num_val = get_txt_field('PKG_NUM')
-                    if pkg_num_val.upper() == 'INNER_BOUND':
+                    if pkg_num_val.upper() == 'INNER_BOND':
                         row = {
                             'PKG_NUM':      pkg_num_val,
                             'PKG_PIN_NAME': get_txt_field('PKG_PIN_NAME'),
@@ -277,7 +285,7 @@ class Parser:
         for row in self.data:
             # Skip special rows - treat as comment, output as-is
             pkg_upper = row['PKG_NUM'].upper()
-            if pkg_upper == 'INNER_BOUND' or row['DIE_NUM'] == '-':
+            if pkg_upper == 'INNER_BOND' or row['DIE_NUM'] == '-':
                 continue
             d_num = row['DIE_NUM']
             p_num = row['PKG_NUM']
@@ -293,7 +301,7 @@ class Parser:
         start_idx = -1
         for i, row in enumerate(self.data):
             # Skip special rows
-            if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['DIE_NUM'] == '-':
+            if row['PKG_NUM'].upper() == 'INNER_BOND' or row['DIE_NUM'] == '-':
                 continue
             if row['PKG_LOC'].upper() == 'L' and row['DIE_PIN_NAME'].upper() != 'NC' and row['DIE_NUM'] != '0':
                 start_idx = i
@@ -307,7 +315,7 @@ class Parser:
             orig_to_new = {}  # Map: original DIE_NUM -> new DIE_NUM (for duplicates)
             for row in ring_seq:
                 # Skip special rows
-                if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['DIE_NUM'] == '-':
+                if row['PKG_NUM'].upper() == 'INNER_BOND' or row['DIE_NUM'] == '-':
                     continue
                 if row['DIE_PIN_NAME'].upper() == 'NC' or row['DIE_NUM'] == '0':
                     row['DIE_NUM'] = '0'
@@ -358,7 +366,7 @@ class Parser:
             pnum = row['PKG_NUM']
             pname = row['DIE_PIN_NAME'].upper()
 
-            if pname == 'DOWNBOUND':
+            if pname == 'DOWNBOND':
                 side = loc if loc in actual_pnums else self._get_ring_side(pnum)
                 if side:
                     actual_pnums[side].add(pnum)
@@ -457,7 +465,7 @@ class Parser:
         last_pkg_sort_key = 0
         for row in self.data:
             pnum = row['PKG_NUM']
-            if pnum.upper() == 'INNER_BOUND':
+            if pnum.upper() == 'INNER_BOND':
                 sortable.append((float('inf'), row))
                 continue
             try:
@@ -493,7 +501,7 @@ class Parser:
         reassigned = 0
         for row in self.data:
             pnum = row['PKG_NUM']
-            if pnum.upper() == 'INNER_BOUND':
+            if pnum.upper() == 'INNER_BOND':
                 continue
             try:
                 p_int = int(pnum)
@@ -529,7 +537,7 @@ class Parser:
         valid_pnums = set()
         for row in self.data:
             pnum = row['PKG_NUM']
-            if pnum in ('0', '-', '') or pnum.upper() == 'INNER_BOUND':
+            if pnum in ('0', '-', '') or pnum.upper() == 'INNER_BOND':
                 continue
             if pnum.upper().startswith('D') or '(D' in pnum.upper():
                 continue
@@ -573,7 +581,7 @@ class Parser:
             if pkg_loc and pkg_loc != '-':
                 last_side = pkg_loc
             pnum = row['PKG_NUM']
-            if pnum in ('0', '-', '') or pnum.upper() == 'INNER_BOUND':
+            if pnum in ('0', '-', '') or pnum.upper() == 'INNER_BOND':
                 # Shared die pad or special row: DIE_LOC follows nearest PKG_LOC
                 if last_side != '-' and row['DIE_LOC'] != last_side:
                     row['DIE_LOC'] = last_side
@@ -631,7 +639,7 @@ class Parser:
         referencing_rows = []
         for row in self.data:
             # Skip special rows - treat as comment, output as-is
-            if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['DIE_NUM'] == '-':
+            if row['PKG_NUM'].upper() == 'INNER_BOND' or row['DIE_NUM'] == '-':
                 continue
             d_num = row['DIE_NUM']
             p_num = row['PKG_NUM']
@@ -645,7 +653,7 @@ class Parser:
         start_idx = -1
         for i, row in enumerate(self.data):
             # Skip special rows
-            if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['DIE_NUM'] == '-':
+            if row['PKG_NUM'].upper() == 'INNER_BOND' or row['DIE_NUM'] == '-':
                 continue
             if row['PKG_LOC'].upper() == 'L' and row['DIE_PIN_NAME'].upper() != 'NC' and row['DIE_NUM'] != '0':
                 start_idx = i
@@ -659,7 +667,7 @@ class Parser:
             orig_to_new = {}  # Map: original DIE_NUM -> new DIE_NUM (for duplicates)
             for row in ring_seq:
                 # Skip special rows
-                if row['PKG_NUM'].upper() == 'INNER_BOUND' or row['DIE_NUM'] == '-':
+                if row['PKG_NUM'].upper() == 'INNER_BOND' or row['DIE_NUM'] == '-':
                     continue
                 if row['DIE_PIN_NAME'].upper() == 'NC' or row['DIE_NUM'] == '0':
                     row['DIE_NUM'] = '0'
@@ -709,11 +717,80 @@ class Parser:
                     if row['DIRECTION'] in ('-', 'UNKNOWN', ''):
                         row['DIRECTION'] = self.v_ports.get(sn, 'UNKNOWN')
 
+    def _parse_die_size(self):
+        raw = self.header.get('DIE_SIZE')
+        if not raw:
+            self.die_size = None
+            return
+        m = re.match(r'\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*$', raw.strip())
+        if not m:
+            self.logger.warn(f"Invalid DIE_SIZE format: '{raw}'. Expected 'AxB' (um). Ignoring.")
+            self.die_size = None
+            return
+        self.die_size = (float(m.group(1)), float(m.group(2)))
+        self.logger.info(f"DIE_SIZE parsed: {self.die_size[0]}x{self.die_size[1]} um")
+
 # --- PDF Generator Class ---
 class PDFGen:
     def __init__(self, logger, parser):
         self.logger = logger
         self.parser = parser
+
+    def _get_package_body_mm(self):
+        pkg_str = self.parser.header.get('PACKAGE', '')
+        parts = pkg_str.split()
+        if not parts:
+            return None
+        m = re.match(r'(\d+)', parts[0])
+        if not m:
+            return None
+        pin_count = int(m.group(1))
+        body_mm = QFN_BODY_SIZES.get(pin_count)
+        if body_mm is None:
+            return None
+        die_size = self.parser.die_size
+        if die_size:
+            die_x_um, die_y_um = die_size
+            body_um = body_mm * 1000
+            max_die = max(die_x_um, die_y_um)
+            if max_die > body_um:
+                self.logger.warn(f"DIE_SIZE {die_x_um}x{die_y_um}um exceeds package body {body_mm}x{body_mm}mm")
+        return (body_mm, body_mm)
+
+    def _compute_frame_dimensions(self, base_apr, base_pkg):
+        body = self._get_package_body_mm()
+        die_size = self.parser.die_size
+
+        if body is None and die_size is None:
+            return base_apr, base_apr, base_pkg, base_pkg
+
+        if die_size:
+            die_x, die_y = die_size
+            ratio = die_x / die_y if die_y > 0 else 1.0
+            if ratio >= 1.0:
+                apr_x = base_apr
+                apr_y = base_apr / ratio
+            else:
+                apr_x = base_apr * ratio
+                apr_y = base_apr
+
+            if body:
+                body_um_x, body_um_y = body[0] * 1000, body[1] * 1000
+                scale_x = body_um_x / die_x if die_x > 0 else 1.0
+                scale_y = body_um_y / die_y if die_y > 0 else 1.0
+                pkg_dim = max(apr_x * scale_x, apr_y * scale_y)
+                pkg_dim = min(pkg_dim, base_pkg)
+                pkg_x = pkg_y = pkg_dim
+            else:
+                pkg_x = pkg_y = base_pkg
+        else:
+            apr_x = apr_y = base_apr
+            pkg_x = pkg_y = base_pkg
+
+        return apr_x, apr_y, pkg_x, pkg_y
+
+    def _side_length(self, side, edge_x, edge_y):
+        return edge_y if side in ('L', 'R') else edge_x
 
     def generate_combined_pdf(self, filename):
         if not HAS_REPORTLAB:
@@ -736,7 +813,7 @@ class PDFGen:
         apr_found_l = False
         seen_pnums = set()
         seen_apr_die_nums = set()  # For APR deduplication: skip duplicate DIE_NUM
-        # Collect D1.xx rows for inner bound connections
+        # Collect D1.xx rows for inner bond connections
         d1xx_rows = []
 
         for row in self.parser.data:
@@ -746,21 +823,21 @@ class PDFGen:
             pname = row['DIE_PIN_NAME'].upper()
 
             # PKG side (Uses current PIN_NUM order)
-            # DOWNBOUND should be included in PKG (even though DIE_NUM=0)
+            # DOWNBOND should be included in PKG (even though DIE_NUM=0)
             if p_loc in pkg_data_by_side:
-                if (pname != 'DOWNBOUND' and pnum in ('0', '-', 'NC')) or 'POWERCUT' in pname: pass
+                if (pname != 'DOWNBOND' and pnum in ('0', '-', 'NC')) or 'POWERCUT' in pname: pass
                 else:
                     if pnum not in seen_pnums:
                         pkg_data_by_side[p_loc].append(row)
                         seen_pnums.add(pnum)
 
             # APR side (Needs local reordering for the Ring)
-            # Skip NC, DOWNBOUND, and DIE_PAD_NUM='0' or '-' (no die pad)
-            # Skip Inner_bound and PKG_NUM='-'
+            # Skip NC, DOWNBOND, and DIE_PAD_NUM='0' or '-' (no die pad)
+            # Skip Inner_bond and PKG_NUM='-'
             # Skip duplicate DIE_NUM (only show one APR pin for multiple wires to same point)
             die_num = row['DIE_NUM']
-            if pname not in ('NC', 'DOWNBOUND') and die_num not in ('0', '-') and a_loc in apr_data_by_side:
-                if row['PKG_NUM'].upper() == 'INNER_BOUND':
+            if pname not in ('NC', 'DOWNBOND') and die_num not in ('0', '-') and a_loc in apr_data_by_side:
+                if row['PKG_NUM'].upper() == 'INNER_BOND':
                     pass  # Skip
                 elif die_num in seen_apr_die_nums:
                     pass  # Skip duplicate
@@ -773,20 +850,20 @@ class PDFGen:
                     else:
                         apr_data_by_side[a_loc].append(row)
 
-            # Collect D1.xx rows for inner bound connections (both D1.xx and (D1.xx) formats)
+            # Collect D1.xx rows for inner bond connections (both D1.xx and (D1.xx) formats)
             if pnum.startswith('D1.') or pnum.startswith('(D1.'):
                 d1xx_rows.append(row)
         
         # Move early APR T pins to the end
         apr_data_by_side['T'].extend(apr_t_early)
 
-        edge_pkg, edge_apr = 350, 200
+        edge_apr_x, edge_apr_y, edge_pkg_x, edge_pkg_y = self._compute_frame_dimensions(200, 350)
         c.setLineWidth(2)
-        c.rect(cx - edge_pkg/2, cy - edge_pkg/2, edge_pkg, edge_pkg)
-        c.rect(cx - edge_apr/2, cy - edge_apr/2, edge_apr, edge_apr)
+        c.rect(cx - edge_pkg_x/2, cy - edge_pkg_y/2, edge_pkg_x, edge_pkg_y)
+        c.rect(cx - edge_apr_x/2, cy - edge_apr_y/2, edge_apr_x, edge_apr_y)
 
         pkg_coords, apr_coords = {}, {}
-        pkg_edge = {'L': cx - edge_pkg/2, 'R': cx + edge_pkg/2, 'B': cy - edge_pkg/2, 'T': cy + edge_pkg/2}
+        pkg_edge = {'L': cx - edge_pkg_x/2, 'R': cx + edge_pkg_x/2, 'B': cy - edge_pkg_y/2, 'T': cy + edge_pkg_y/2}
         pkg_margin = 8
         pkg_lim = {'L': pkg_edge['L'] + pkg_margin, 'R': pkg_edge['R'] - pkg_margin,
                    'B': pkg_edge['B'] + pkg_margin, 'T': pkg_edge['T'] - pkg_margin}
@@ -794,16 +871,18 @@ class PDFGen:
         # Use max pin count for uniform font size across all 4 sides (PKG + APR)
         max_cnt = max(l_cnt, b_cnt, r_cnt, t_cnt)
         for side in ('L', 'B', 'R', 'T'):
-            p_coords = self._draw_side_boxes(c, side, pkg_data_by_side[side], cx, cy, edge_pkg, getattr(self, f"_{side}_pos")(cx, cy, edge_pkg), max_cnt, 'PKG', label_inside=False)
+            pkg_len = self._side_length(side, edge_pkg_x, edge_pkg_y)
+            apr_len = self._side_length(side, edge_apr_x, edge_apr_y)
+            p_coords = self._draw_side_boxes(c, side, pkg_data_by_side[side], cx, cy, pkg_len, getattr(self, f"_{side}_pos")(cx, cy, edge_pkg_x, edge_pkg_y), max_cnt, 'PKG', label_inside=False)
             pkg_coords.update(p_coords)
-            a_coords = self._draw_side_boxes(c, side, apr_data_by_side[side], cx, cy, edge_apr, getattr(self, f"_{side}_pos")(cx, cy, edge_apr), max_cnt, 'APR', label_inside=False, max_label_extent=pkg_lim[side], hollow_pg=True, skip_start_dot=True)
+            a_coords = self._draw_side_boxes(c, side, apr_data_by_side[side], cx, cy, apr_len, getattr(self, f"_{side}_pos")(cx, cy, edge_apr_x, edge_apr_y), max_cnt, 'APR', label_inside=False, max_label_extent=pkg_lim[side], hollow_pg=True, skip_start_dot=True)
             apr_coords.update(a_coords)
 
         c.setLineWidth(0.3)
         for row in self.parser.data:
             pname = row['DIE_PIN_NAME'].upper()
-            # Skip NC, DOWNBOUND, and DIE_PAD_NUM='0' for bonding wires (no APR pin exists)
-            if pname in ('NC', 'DOWNBOUND') or row['DIE_NUM'] in ('0', '-'): continue
+            # Skip NC, DOWNBOND, and DIE_PAD_NUM='0' for bonding wires (no APR pin exists)
+            if pname in ('NC', 'DOWNBOND') or row['DIE_NUM'] in ('0', '-'): continue
             p_pt = pkg_coords.get(row['PKG_NUM'])
             a_pt = apr_coords.get(row['DIE_NUM'])
             if p_pt and a_pt:
@@ -835,7 +914,7 @@ class PDFGen:
                 c.setFillColor(dir_color)
                 c.circle(wire_end[0], wire_end[1], 1.5, stroke=0, fill=1)
 
-        # Draw inner bound red lines for D1.xx connections
+        # Draw inner bond red lines for D1.xx connections
         # Rule: PKG_NUM=D1.xx + DIE_NUM=yy means xx -> yy (regardless of parentheses)
         # Symmetric pair: D1.90+DIE_NUM=1 AND D1.1+DIE_NUM=90 means 90<->1 connected both ways
         # Asymmetric: only one direction exists = ERROR + dashed line
@@ -863,7 +942,7 @@ class PDFGen:
                 reverse_key = (b, a)
                 if reverse_key not in direction_map:
                     # Asymmetric: a->b exists but b->a missing
-                    self.logger.error(f"Inner Bound ASYMMETRIC: {a}->{b} exists but {b}->{a} missing!")
+                    self.logger.error(f"Inner Bond ASYMMETRIC: {a}->{b} exists but {b}->{a} missing!")
 
             drawn_extended_pins = set()
 
@@ -982,7 +1061,8 @@ class PDFGen:
 
             self.logger.info(f"  Ground/DB: key={coord_key}, count={count}")
 
-        self._draw_center_info(c, cx, cy, edge_apr, l_cnt, b_cnt, r_cnt, t_cnt, apr_data_by_side)
+        self._draw_center_info(c, cx, cy, min(edge_apr_x, edge_apr_y), l_cnt, b_cnt, r_cnt, t_cnt, apr_data_by_side)
+        self._draw_scale_bar(c, edge_pkg_x, edge_pkg_y, 'COMBINED', width)
         c.save()
 
     def generate_apr_pdf(self, filename):
@@ -990,18 +1070,18 @@ class PDFGen:
         self.logger.info(f"Generating APR Diagram: {filename}")
         c = canvas.Canvas(filename, pagesize=landscape(A4)); width, height = landscape(A4)
         cx, cy = width/2, 255; self._draw_header(c, "APR PIN DIAGRAM", width, height)
-        edge = 280
-        c.setLineWidth(2); c.rect(cx - edge/2, cy - edge/2, edge, edge)
+        edge_x, edge_y = self._compute_frame_dimensions(280, 280)[:2]
+        c.setLineWidth(2); c.rect(cx - edge_x/2, cy - edge_y/2, edge_x, edge_y)
         data_by_side = {'L': [], 'B': [], 'R': [], 'T': []}
         t_early = []
         found_l = False
         seen_die_nums = set()  # For deduplication: skip duplicate DIE_NUM
         for row in self.parser.data:
             pname = row['DIE_PIN_NAME'].upper()
-            # Skip NC, DOWNBOUND, and DIE_PAD_NUM='0' for APR (no die pad to show)
-            if pname in ('NC', 'DOWNBOUND') or row['DIE_NUM'] in ('0', '-'): continue
-            # Skip Inner_bound and PKG_NUM='-'
-            if row['PKG_NUM'].upper() == 'INNER_BOUND': continue
+            # Skip NC, DOWNBOND, and DIE_PAD_NUM='0' for APR (no die pad to show)
+            if pname in ('NC', 'DOWNBOND') or row['DIE_NUM'] in ('0', '-'): continue
+            # Skip Inner_bond and PKG_NUM='-'
+            if row['PKG_NUM'].upper() == 'INNER_BOND': continue
             # Skip duplicate DIE_NUM (only show one APR pin for multiple wires to same point)
             die_num = row['DIE_NUM']
             if die_num in seen_die_nums:
@@ -1019,15 +1099,17 @@ class PDFGen:
         pkg_str = self.parser.header.get('PACKAGE', '64 16 16 16 16')
         parts = pkg_str.split()
         l_cnt, b_cnt, r_cnt, t_cnt = map(int, parts[1:5]) if len(parts) >= 5 else (16, 16, 16, 16)
-        self._draw_center_info(c, cx, cy, edge, l_cnt, b_cnt, r_cnt, t_cnt, data_by_side)
-        apr_edge = {'L': cx - edge/2, 'R': cx + edge/2, 'B': cy - edge/2, 'T': cy + edge/2}
+        self._draw_center_info(c, cx, cy, min(edge_x, edge_y), l_cnt, b_cnt, r_cnt, t_cnt, data_by_side)
+        apr_edge = {'L': cx - edge_x/2, 'R': cx + edge_x/2, 'B': cy - edge_y/2, 'T': cy + edge_y/2}
         header_bottom = 510
         # For APR, use max pin count to ensure uniform font size across all 4 sides
         max_cnt = max(l_cnt, b_cnt, r_cnt, t_cnt)
         for side in ('L', 'B', 'R', 'T'):
             limit = apr_edge[side]
             if side == 'T': limit = header_bottom
-            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), max_cnt, 'APR', label_inside=False, max_label_extent=limit, allow_overflow=True)
+            side_len = self._side_length(side, edge_x, edge_y)
+            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, side_len, getattr(self, f"_{side}_pos")(cx, cy, edge_x, edge_y), max_cnt, 'APR', label_inside=False, max_label_extent=limit, allow_overflow=True)
+        self._draw_scale_bar(c, edge_x, edge_y, 'APR', width)
         c.save()
 
     def generate_pkg_pdf(self, filename):
@@ -1035,13 +1117,13 @@ class PDFGen:
         self.logger.info(f"Generating PKG Diagram: {filename}")
         c = canvas.Canvas(filename, pagesize=landscape(A4)); width, height = landscape(A4)
         cx, cy = width/2, 255; self._draw_header(c, "PACKAGE PIN DIAGRAM", width, height)
-        edge = 280
-        c.setLineWidth(2); c.rect(cx - edge/2, cy - edge/2, edge, edge)
+        _, _, edge_x, edge_y = self._compute_frame_dimensions(280, 280)
+        c.setLineWidth(2); c.rect(cx - edge_x/2, cy - edge_y/2, edge_x, edge_y)
         pkg_data = {}; order = []
         for row in self.parser.data:
             pnum = row['PKG_NUM']
             pname = row['DIE_PIN_NAME'].upper()
-            # Skip: POWERCUT, but NOT NC (NC should show on PKG) and NOT DOWNBOUND
+            # Skip: POWERCUT, but NOT NC (NC should show on PKG) and NOT DOWNBOND
             if 'POWERCUT' in pname: continue
             if pnum in ('0', '-'): continue
             if pnum not in pkg_data: pkg_data[pnum] = row.copy(); order.append(pnum)
@@ -1049,8 +1131,8 @@ class PDFGen:
         for pnum in order:
             loc = pkg_data[pnum]['PKG_LOC'].upper()
             pname = pkg_data[pnum]['DIE_PIN_NAME'].upper()
-            # For DOWNBOUND or pins with invalid LOCATION, infer side from PIN_NUM
-            if pname == 'DOWNBOUND' or loc not in data_by_side:
+            # For DOWNBOND or pins with invalid LOCATION, infer side from PIN_NUM
+            if pname == 'DOWNBOND' or loc not in data_by_side:
                 inferred_side = self.parser._get_ring_side(pnum)
                 if inferred_side:
                     data_by_side[inferred_side].append(pkg_data[pnum])
@@ -1059,21 +1141,23 @@ class PDFGen:
         pkg_str = self.parser.header.get('PACKAGE', '64 16 16 16 16')
         parts = pkg_str.split()
         l_cnt, b_cnt, r_cnt, t_cnt = map(int, parts[1:5]) if len(parts) >= 5 else (16, 16, 16, 16)
-        self._draw_center_info(c, cx, cy, edge, l_cnt, b_cnt, r_cnt, t_cnt, data_by_side)
-        pkg_edge = {'L': cx - edge/2, 'R': cx + edge/2, 'B': cy - edge/2, 'T': cy + edge/2}
+        self._draw_center_info(c, cx, cy, min(edge_x, edge_y), l_cnt, b_cnt, r_cnt, t_cnt, data_by_side)
+        pkg_edge = {'L': cx - edge_x/2, 'R': cx + edge_x/2, 'B': cy - edge_y/2, 'T': cy + edge_y/2}
         header_bottom = 510
         # For PKG, use max pin count to ensure uniform font size across all 4 sides
         max_cnt = max(l_cnt, b_cnt, r_cnt, t_cnt)
         for side in ('L', 'B', 'R', 'T'):
             limit = pkg_edge[side]
             if side == 'T': limit = header_bottom
-            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, edge, getattr(self, f"_{side}_pos")(cx, cy, edge), max_cnt, 'PKG', label_inside=False, max_label_extent=limit, allow_overflow=True)
+            side_len = self._side_length(side, edge_x, edge_y)
+            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, side_len, getattr(self, f"_{side}_pos")(cx, cy, edge_x, edge_y), max_cnt, 'PKG', label_inside=False, max_label_extent=limit, allow_overflow=True)
+        self._draw_scale_bar(c, edge_x, edge_y, 'PKG', width)
         c.save()
 
-    def _L_pos(self, cx, cy, edge): return (cx - edge/2, cy)
-    def _B_pos(self, cx, cy, edge): return (cx, cy - edge/2)
-    def _R_pos(self, cx, cy, edge): return (cx + edge/2, cy)
-    def _T_pos(self, cx, cy, edge): return (cx, cy + edge/2)
+    def _L_pos(self, cx, cy, edge_x, edge_y=None): return (cx - edge_x/2, cy)
+    def _B_pos(self, cx, cy, edge_x, edge_y=None): return (cx, cy - (edge_y or edge_x)/2)
+    def _R_pos(self, cx, cy, edge_x, edge_y=None): return (cx + edge_x/2, cy)
+    def _T_pos(self, cx, cy, edge_x, edge_y=None): return (cx, cy + (edge_y or edge_x)/2)
 
     def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False, max_label_extent=None, allow_overflow=False, hollow_pg=False, skip_start_dot=False):
         bx, by = b_pos; coords = {}
@@ -1286,7 +1370,11 @@ class PDFGen:
         c.setFont("Helvetica", 10); h = self.parser.header
         proj = h.get('PRODUCTION NO.', h.get('PRODUCTION NO', 'N/A'))
         pkg = h.get('PACKAGE', 'N/A'); ver = h.get('VERSION', 'N/A')
-        c.drawString(60, height - 65, f"Project: {proj}"); c.drawCentredString(width/2, height - 65, f"Package: {pkg}"); c.drawRightString(width - 60, height - 65, f"Version: {ver}")
+        die_size = h.get('DIE_SIZE', '')
+        body = self._get_package_body_mm()
+        pkg_size_str = f" ({int(body[0]*1000)}x{int(body[1]*1000)} um)" if body else ''
+        die_str = f"  ,  Die: {die_size} um" if die_size else ''
+        c.drawString(60, height - 65, f"Project: {proj}"); c.drawCentredString(width/2, height - 65, f"Package: {pkg}{pkg_size_str}{die_str}"); c.drawRightString(width - 60, height - 65, f"Version: {ver}")
 
     def _draw_center_info(self, c, cx, cy, edge, l, b, r, t, data):
         f_max = max(l, b, r, t)
@@ -1297,6 +1385,72 @@ class PDFGen:
         c.drawCentredString(cx, cy + spacing, f"Project: {h.get('PRODUCTION NO.', h.get('PRODUCTION NO', 'N/A'))}")
         c.drawCentredString(cx, cy, f"Package: {h.get('PACKAGE', 'N/A')}")
         c.drawCentredString(cx, cy - spacing, f"Version: {h.get('VERSION', 'N/A')}")
+
+    def _draw_scale_bar(self, c, frame_x, frame_y, mode, page_width):
+        """Draw a scale bar at bottom-right showing physical size reference.
+        mode: 'PKG', 'APR', or 'COMBINED'
+        """
+        body = self._get_package_body_mm()
+        die_size = self.parser.die_size
+
+        if body is None and die_size is None:
+            return
+
+        # --- Compute scale (pts per um) ---
+        if mode == 'APR':
+            if die_size:
+                max_dim = max(die_size)
+                scale = frame_x / max_dim if max_dim > 0 else None
+            elif body:
+                scale = frame_x / (body[0] * 1000)
+            else:
+                return
+        elif mode == 'PKG':
+            if body:
+                scale = frame_x / (body[0] * 1000)
+            else:
+                return
+        else:  # COMBINED
+            if body:
+                scale = frame_x / (body[0] * 1000)
+            else:
+                return
+
+        # --- Choose bar length (round physical distance) ---
+        if scale <= 0:
+            return
+        candidates_mm = [0.5, 1, 2, 5, 10]
+        bar_len = None
+        for mm in candidates_mm:
+            pts = mm * 1000 * scale
+            if 30 <= pts <= 120:
+                bar_len = pts
+                bar_mm = mm
+                break
+        if bar_len is None:
+            bar_len = 1000 * scale
+            bar_mm = 1.0
+
+        # --- Position: bottom-right corner ---
+        rx = page_width - 60
+        ry = 30
+
+        # --- Draw scale bar ---
+        c.setStrokeColor(colors.black); c.setLineWidth(0.8); c.setFillColor(colors.black)
+        c.line(rx - bar_len, ry, rx, ry)
+        c.line(rx - bar_len, ry - 3, rx - bar_len, ry + 3)
+        c.line(rx, ry - 3, rx, ry + 3)
+        c.setFont("Helvetica", 7)
+        c.drawCentredString(rx - bar_len / 2, ry + 5, f"{bar_mm:g} mm")
+
+        # --- Physical size annotation ---
+        info_y = ry - 10
+        c.setFont("Helvetica", 6)
+        if body:
+            c.drawRightString(rx, info_y, f"PKG: {int(body[0]*1000)}x{int(body[1]*1000)} um")
+            info_y -= 8
+        if die_size:
+            c.drawRightString(rx, info_y, f"Die: {int(die_size[0])}x{int(die_size[1])} um")
 
 # --- Checker Class ---
 class Checker:
