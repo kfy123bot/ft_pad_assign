@@ -301,38 +301,40 @@ class Parser:
             if match:
                 referencing_rows.append((row, match.group(1))) # (row_object, original_target_xx)
 
-        # 2. Re-indexing logic (First L is 1, keep 0 as 0)
-        start_idx = -1
-        for i, row in enumerate(self.data):
-            # Skip special rows
+        # 2. Re-indexing logic: sort by DIE_LOC (L→B→R→T), then assign 1,2,3,...
+        SIDE_ORDER = {'L': 0, 'B': 1, 'R': 2, 'T': 3}
+        reindexable = []  # (side_order, orig_die_num_int, row)
+        for row in self.data:
             if row['PKG_NUM'].upper() == 'INNER_BOND' or row['DIE_NUM'] == '-':
                 continue
-            if row['PKG_LOC'].upper() == 'L' and row['DIE_PIN_NAME'].upper() != 'NC' and row['DIE_NUM'] != '0':
-                start_idx = i
-                break
+            if row['DIE_PIN_NAME'].upper() == 'NC' or row['DIE_NUM'] == '0':
+                row['DIE_NUM'] = '0'
+                continue
+            die_loc = row['DIE_LOC'].upper()
+            if die_loc not in SIDE_ORDER:
+                continue
+            try:
+                orig_int = int(row['DIE_NUM'])
+            except (ValueError, TypeError):
+                continue
+            reindexable.append((SIDE_ORDER[die_loc], orig_int, row))
 
-        if start_idx == -1:
-            self.logger.warn("No L-side signal pin found, DIE_NUM reindexing skipped.")
-        if start_idx != -1:
-            ring_seq = self.data[start_idx:] + self.data[:start_idx]
+        if not reindexable:
+            self.logger.warn("No reindexable DIE_NUM found, DIE_NUM reindexing skipped.")
+        else:
+            # Sort by DIE_LOC side order, then by original DIE_NUM within each side
+            reindexable.sort(key=lambda x: (x[0], x[1]))
             idx = 1
-            orig_to_new = {}  # Map: original DIE_NUM -> new DIE_NUM (for duplicates)
-            for row in ring_seq:
-                # Skip special rows
-                if row['PKG_NUM'].upper() == 'INNER_BOND' or row['DIE_NUM'] == '-':
-                    continue
-                if row['DIE_PIN_NAME'].upper() == 'NC' or row['DIE_NUM'] == '0':
-                    row['DIE_NUM'] = '0'
+            orig_to_new = {}
+            for _, orig_die, row in reindexable:
+                orig_die_str = str(orig_die)
+                if orig_die_str in orig_to_new:
+                    row['DIE_NUM'] = orig_to_new[orig_die_str]
                 else:
-                    orig_die = row['DIE_NUM']
-                    if orig_die in orig_to_new:
-                        # Duplicate DIE_NUM: reuse the same new number
-                        row['DIE_NUM'] = orig_to_new[orig_die]
-                    else:
-                        # New DIE_NUM: assign new number
-                        row['DIE_NUM'] = str(idx)
-                        orig_to_new[orig_die] = str(idx)
-                        idx += 1
+                    row['DIE_NUM'] = str(idx)
+                    orig_to_new[orig_die_str] = str(idx)
+                    idx += 1
+            self.logger.info(f"DIE_NUM reindexed: {len(orig_to_new)} unique values (L→B→R→T order)")
 
         # 3. Dynamic Update for D1.xx
         for ref_row, target_xx in referencing_rows:
@@ -486,7 +488,7 @@ class Parser:
         sortable.sort(key=lambda x: x[0])
         self.data = [row for _, row in sortable]
         self._ring_shifted = True
-        self.logger.info(f"Ring-shifted data: PKG_TOP_LEFT_PIN={aa}, offset={offset}, total={total}")
+        self.logger.info(f"Ring-sorted data: PKG_TOP_LEFT_PIN={aa}, offset={offset}, total={total}")
 
     def _reindex_pkg_num(self):
         """Re-index PKG_NUM sequentially from 1 following ring order.
@@ -877,6 +879,15 @@ class PDFGen:
         # Move early APR T pins to the end
         apr_data_by_side['T'].extend(apr_t_early)
 
+        # Sort PKG pins by PKG_NUM for correct pin positioning
+        def _pnum_key(r):
+            try:
+                return int(r['PKG_NUM'])
+            except (ValueError, TypeError):
+                return float('inf')
+        for side in ('L', 'B', 'R', 'T'):
+            pkg_data_by_side[side].sort(key=_pnum_key)
+
         edge_apr_x, edge_apr_y, edge_pkg_x, edge_pkg_y = self._compute_frame_dimensions(200, 350)
         c.setLineWidth(2)
         c.rect(cx - edge_pkg_x/2, cy - edge_pkg_y/2, edge_pkg_x, edge_pkg_y)
@@ -1158,6 +1169,14 @@ class PDFGen:
                     data_by_side[inferred_side].append(pkg_data[pnum])
             elif loc in data_by_side:
                 data_by_side[loc].append(pkg_data[pnum])
+        # Sort each side by PKG_NUM (numeric order) for correct pin positioning
+        def _pnum_key(r):
+            try:
+                return int(r['PKG_NUM'])
+            except (ValueError, TypeError):
+                return float('inf')
+        for side in ('L', 'B', 'R', 'T'):
+            data_by_side[side].sort(key=_pnum_key)
         pkg_str = self.parser.header.get('PACKAGE', '64 16 16 16 16')
         parts = pkg_str.split()
         l_cnt, b_cnt, r_cnt, t_cnt = map(int, parts[1:5]) if len(parts) >= 5 else (16, 16, 16, 16)
