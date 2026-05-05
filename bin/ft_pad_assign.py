@@ -81,11 +81,15 @@ FIELD_ALIASES = {
     'SSO':          ['SSO', 'SSO_RATIO'],
 }
 
-# --- Package Body Size Lookup (mm, 0.5mm pitch default) ---
+# --- Package Body Size Lookup (mm) ---
+# Duplicate pin counts resolve to the smallest body size.
 QFN_BODY_SIZES = {
-    16: 3, 20: 3, 24: 4, 28: 4, 32: 5, 36: 5,
-    40: 6, 44: 6, 48: 7, 52: 7, 56: 8,
-    64: 9, 68: 9, 72: 10, 76: 10, 88: 12, 100: 12,
+    12: 3, 16: 3, 20: 3,
+    24: 4, 28: 4,
+    32: 5, 40: 5,
+    44: 6, 48: 6, 56: 6,
+    64: 7,
+    76: 9, 88: 9,
 }
 
 # --- Parser Class ---
@@ -139,7 +143,7 @@ class Parser:
             # If line has ':' in first column and doesn't look like CSV data, it's a header
             if ':' in stripped and not stripped.startswith(('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '(', 'D1')):
                 # Parse header line (handle CSV format with commas like "PACKAGE,,: value")
-                match = re.search(r'^(PRODUCTION NO\.?|PROJECT NO\.?|PKG_TOP_LEFT_PIN|PACKAGE|VERSION|DIE_SIZE)[,\s]*:\s*(.*)', stripped, re.I)
+                match = re.search(r'^(PRODUCTION NO\.?|PROJECT NO\.?|PKG_TOP_LEFT_PIN|PACKAGE|VERSION|DIE_SIZE|PKG_SIZE)[,\s]*:\s*(.*)', stripped, re.I)
                 if match:
                     value = match.group(2).strip().rstrip(',')
                     key = match.group(1).upper().rstrip('.')
@@ -214,7 +218,7 @@ class Parser:
         for line in f:
             line = line.strip()
             if not line or re.match(r'^-+$', line): continue
-            match = re.search(r'^(PRODUCTION NO\.?|PROJECT NO\.?|PKG_TOP_LEFT_PIN|PACKAGE|VERSION|DIE_SIZE)\s*:\s*(.*)', line, re.I)
+            match = re.search(r'^(PRODUCTION NO\.?|PROJECT NO\.?|PKG_TOP_LEFT_PIN|PACKAGE|VERSION|DIE_SIZE|PKG_SIZE)\s*:\s*(.*)', line, re.I)
             if match:
                 key = match.group(1).upper().rstrip('.')
                 if key == 'PROJECT NO':
@@ -737,6 +741,23 @@ class PDFGen:
         self.parser = parser
 
     def _get_package_body_mm(self):
+        # 1. PKG_SIZE header takes priority (unit: um, convert to mm for internal use)
+        pkg_size_raw = self.parser.header.get('PKG_SIZE')
+        if pkg_size_raw:
+            m = re.match(r'\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*$', pkg_size_raw.strip())
+            if m:
+                body_x_um, body_y_um = float(m.group(1)), float(m.group(2))
+                body_x, body_y = body_x_um / 1000, body_y_um / 1000
+                die_size = self.parser.die_size
+                if die_size:
+                    max_die = max(die_size)
+                    if max_die > max(body_x_um, body_y_um):
+                        self.logger.warn(f"DIE_SIZE {die_size[0]}x{die_size[1]}um exceeds PKG_SIZE {body_x_um}x{body_y_um}um")
+                return (body_x, body_y)
+            else:
+                self.logger.warn(f"Invalid PKG_SIZE format: '{pkg_size_raw}'. Expected 'AxB' (um). Ignoring.")
+
+        # 2. Fall back to pin count lookup
         pkg_str = self.parser.header.get('PACKAGE', '')
         parts = pkg_str.split()
         if not parts:
@@ -754,7 +775,7 @@ class PDFGen:
             body_um = body_mm * 1000
             max_die = max(die_x_um, die_y_um)
             if max_die > body_um:
-                self.logger.warn(f"DIE_SIZE {die_x_um}x{die_y_um}um exceeds package body {body_mm}x{body_mm}mm")
+                self.logger.warn(f"DIE_SIZE {die_x_um}x{die_y_um}um exceeds package body {int(body_mm*1000)}x{int(body_mm*1000)}um")
         return (body_mm, body_mm)
 
     def _compute_frame_dimensions(self, base_apr, base_pkg):
@@ -778,9 +799,8 @@ class PDFGen:
                 body_um_x, body_um_y = body[0] * 1000, body[1] * 1000
                 scale_x = body_um_x / die_x if die_x > 0 else 1.0
                 scale_y = body_um_y / die_y if die_y > 0 else 1.0
-                pkg_dim = max(apr_x * scale_x, apr_y * scale_y)
-                pkg_dim = min(pkg_dim, base_pkg)
-                pkg_x = pkg_y = pkg_dim
+                pkg_x = min(apr_x * scale_x, base_pkg)
+                pkg_y = min(apr_y * scale_y, base_pkg)
             else:
                 pkg_x = pkg_y = base_pkg
         else:
@@ -1419,17 +1439,17 @@ class PDFGen:
         # --- Choose bar length (round physical distance) ---
         if scale <= 0:
             return
-        candidates_mm = [0.5, 1, 2, 5, 10]
+        candidates_um = [500, 1000, 2000, 5000, 10000]
         bar_len = None
-        for mm in candidates_mm:
-            pts = mm * 1000 * scale
+        for um_val in candidates_um:
+            pts = um_val * scale
             if 30 <= pts <= 120:
                 bar_len = pts
-                bar_mm = mm
+                bar_um = um_val
                 break
         if bar_len is None:
             bar_len = 1000 * scale
-            bar_mm = 1.0
+            bar_um = 1000
 
         # --- Position: bottom-right corner ---
         rx = page_width - 60
@@ -1441,7 +1461,7 @@ class PDFGen:
         c.line(rx - bar_len, ry - 3, rx - bar_len, ry + 3)
         c.line(rx, ry - 3, rx, ry + 3)
         c.setFont("Helvetica", 7)
-        c.drawCentredString(rx - bar_len / 2, ry + 5, f"{bar_mm:g} mm")
+        c.drawCentredString(rx - bar_len / 2, ry + 5, f"{bar_um:g} um")
 
         # --- Physical size annotation ---
         info_y = ry - 10
