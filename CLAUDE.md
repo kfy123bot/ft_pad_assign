@@ -2,834 +2,132 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Quick Start: Development Commands
+## Quick Start
 
 ```bash
-# Run the main tool on all example files
+# Test all CSV examples (output to test_out/)
 make test_py
 
-# Run specific example (output goes to output/ folder)
-python3 bin/ft_pad_assign.py -list examples/example.pin_list -o output -all
+# Run single file
+python3 bin/ft_pad_assign.py -list examples/qfn48.8028.pin_list.csv -o output -all
 
-# Clean all generated files
+# Clean generated files
 make clean
-
-# Show all available targets
-make help
 ```
 
-## GitHub 操作
-
-**快速開始（新目錄）：**
-```bash
-git clone git@github.com:kfy123bot/ft_pad_assign.git
-cd ft_pad_assign
-git config user.email "kfy123.bot@gmail.com"
-git config user.name "kfy123bot"
-```
-
-**詳細指南：** [`CLAUDE.forGit.md`](CLAUDE.forGit.md)
+**Dependency:** `reportlab` (PDF generation). Install: `pip3 install reportlab`
 
 ## Development Workflow
 
-**Critical:** NEVER automatically commit or push changes. Wait for explicit user commands.
+**NEVER** commit or push unless explicitly asked. When making changes:
+1. Edit code
+2. Run `make test_py` to verify
+3. Report results — stop there
 
-When working on code changes:
-1. Make changes as requested
-2. Test using `make test_py` when modifying PDF generation, parsing, or pin logic
-3. Report results and any issues to the user
-4. **DO NOT** commit, push, or sync unless user explicitly asks for it
+## Architecture
 
-## Key Development Files
+Single-file tool (`bin/ft_pad_assign.py`, ~1720 lines). Five classes with clear data flow:
 
-| File | Purpose |
-|------|---------|
-| `bin/ft_pad_assign.py` | Main Python implementation (700+ lines) — parser, PDF gen, constraint writers |
-| `examples/*.pin_list` / `*.csv` | Test input files (tab-separated and CSV formats) |
-| `Makefile` | Build and test automation (Python/Perl/C++ versions) |
-
-# FT_PAD_ASSIGN Project Understanding
-
-## Overview
-FT_PAD_ASSIGN is an IC I/O pin assignment tool that reads pin list files and generates:
-- PKG PDF: Package pin layout diagram
-- APR PDF: Die pad layout diagram
-- Combined PDF: PKG + APR with bonding wires
-- Constraint files: Innovus (.inn) and ICC2 (.icc2)
-- Stagger density report
-
-## Pin List File Formats
-
-### Tab-Separated Format (.pin_list)
 ```
-PKG_NUM  DIE_NUM  PIN_NAME  IO_CELL_NAME  PKG_LOC  DIE_LOC  DIRECTION  LOAD  SLEW  SSO
+Input File (.csv / .pin_list)
+       │
+       ▼
+   Parser  ──→  self.header  (dict: PRODUCTION NO, PACKAGE, DIE_SIZE, etc.)
+    (L96)       self.data    (list[dict]: one dict per pin row)
+                self.die_size (tuple[int,int] | None)
+       │
+       ├──── PDFGen  (L740)  ──→  PKG / APR / Combined PDFs
+       ├──── Writer  (L1521) ──→  .new, .new.csv, .inn.const, .icc2.const
+       └──── Checker (L1495) ──→  _stagger.rpt
 ```
-- Headers in first rows before data
-- `PKG_LOC` = L/B/R/T (package side location)
-- `DIE_LOC` = L/B/R/T (die pad side location)
-- `DIRECTION` = P (Power, red), G (Ground, blue), or other (grey)
 
-### CSV Format (.csv)
-- Same structure but comma-separated
-- Header row: `PKG_NUM,DIE_NUM,PIN_NAME,IO_CELL_NAME,PKG_LOC,DIE_LOC,DIRECTION,LOAD,SLEW,SSO`
-- May have embedded commas in header (e.g., `PACKAGE,,: 48QFN`)
-- Use `csv.DictReader` with proper header handling
-- Empty cells `""` are preserved as empty string (not converted to "-")
-- When writing to .new file, empty strings are converted to "-"
+**Parse order** (in `parse_list()`):
+```
+ring_shift → reindex_pkg_num → reassign_pkg_loc → reassign_die_loc → sanity_check → reorder_and_reindex_apr_data → parse_die_size
+```
 
-## PIN_NUM / DIE_PAD_NUM 處理規則
+## Pin List Format
 
-| 條件 | PKG PDF | APR PDF | Combined PDF | 說明 |
-|------|---------|---------|--------------|------|
-| `PIN_NUM='0'` 或 `'-'` | **跳過** (不顯示) | - | - | PKG 無效腳位 |
-| `DIE_PAD_NUM='0'` 或 `'-'` | - | **跳過** | **跳過** (無 APR pin) | APR 無效腳位 |
-| `PIN_NAME=NC` | **顯示** (黑色方塊) | **跳過** | **跳過** | 無連接 |
-| `PIN_NAME=DOWNBOND` | **顯示** (藍色方塊) | **跳過** | **跳過** | 接地/bonding 端點 |
-| `PIN_NAME=POWERCUT` | **跳過** (不顯示) | **顯示** (黑色方塊) | - | Power cut |
-| `PIN_NUM='D1.xx'` | 不顯示 | 不顯示 | **延伸 APR pin 並用紅線連接** | Inner bond 連接 |
+CSV or tab-separated. Header section (`KEY : VALUE`), then data table.
 
-### Inner Bond (D1.xx) 處理
+### Required Headers
+- `PRODUCTION NO` (or `PROJECT NO`) — project name, becomes output filename prefix
+- `PACKAGE` — e.g. `48QFN 12 12 12 12` (total L B R T pin counts)
+- `VERSION`
 
-**核心規則**：xx 和 yy 都代表 DIE_NUM（晶粒墊片編號）
+### Optional Headers
+- `DIE_SIZE : 2500x2000` — die dimensions in um (enables aspect-ratio frame scaling)
+- `PKG_SIZE : 7000x7000` — package body in um (overrides QFN lookup table)
+- `PKG_TOP_LEFT_PIN : N` — ring shift: pin N becomes L-side pin 1
 
-#### 方向規則
+### Data Columns (10 fields, aliases supported)
+`PKG_NUM`, `DIE_NUM`, `PIN_NAME`, `IO_CELL_NAME`, `PKG_LOC`, `DIE_LOC`, `DIRECTION`, `LOAD`, `SLEW`, `SSO`
 
-| 格式 | PIN_NUM | DIE_PAD_NUM | 連接方向 |
-|------|---------|-------------|--------|
-| `D1.xx` | `D1.77` | `42` | DIE_NUM(77) → DIE_NUM(42) |
-| `(D1.xx)` | `(D1.77)` | `42` | DIE_NUM(42) → DIE_NUM(77) |
+Field aliases are defined in `FIELD_ALIASES` (L70) — e.g. `PIN_NUM` → `PKG_NUM`, `DIE_PAD_NUM` → `DIE_NUM`.
 
-**詳細流程**：
-1. 從 PIN_NUM 中提取 xx（DIE_NUM）
-2. 使用 DIE_PAD_NUM 欄位的值作為 yy（另一個 DIE_NUM）
-3. 根據括號判斷連接方向（無括號：xx→yy；有括號：yy→xx）
-4. 兩個 DIE_NUM 對應的 APR pin shape 向 chip 中心延伸
-5. 延伸 pin 保持原始形狀（空心），寬度縮小到 80%
-6. 紅線連接兩個延伸後的端點
-7. 僅在 Combined PDF 中顯示
+## Special Pin Types
 
-#### Pin 延伸規則（L/R/B/T 四邊）
+| Type | Condition | PKG PDF | APR PDF | Combined |
+|------|-----------|---------|---------|----------|
+| NC | `PIN_NAME=NC` | Black box | Skip | Skip |
+| DOWNBOND | `PIN_NAME=DOWNBOND` | Blue box | Skip | Skip + ground symbol |
+| POWERCUT | `PIN_NAME=POWERCUT` | Skip | Black box | — |
+| Invalid PKG | `PKG_NUM='0'` or `'-'` | Skip | — | — |
+| Invalid APR | `DIE_NUM='0'` or `'-'` | — | Skip | Skip |
+| Inner Bond | `PKG_NUM='D1.xx'` or `(D1.xx)` | — | — | Extended pin + red wire |
 
-| Side | 原始形狀 | 延伸方向 | 座標計算 | 寬度 | 線寬 |
-|------|---------|---------|--------|------|------|
-| **L** | 水平 (len×th) | →（向右） | (x+th, y) | 100% | 0.5 |
-| **R** | 水平 (len×th) | ←（向左） | (x-th, y) | 100% | 0.5 |
-| **B** | 竖直 (th×len) | ↑（向上） | (x, y+len) | 80% | 0.5 |
-| **T** | 竖直 (th×len) | ↓（向下） | (x, y-len) | 80% | 0.5 |
+### Inner Bond (D1.xx)
 
-**B/T side 特殊處理**：
-- 原始 pin 寬度 = box_thickness（水平）
-- 原始 pin 高度 = box_len（竖直）
-- 延伸後寬度 = box_thickness × 0.8（避免超過標準寬度）
-- 延伸後高度 = box_len（保持原始）
-- 線寬 = 0.5（比 L/R 的 0.5 相同，確保視覺一致）
-- 形狀 = 空心矩形（fill=0, stroke=1）
+Direction: `D1.77` + `DIE_NUM=42` → wire from 77→42. With parens `(D1.77)` → reversed: 42→77.
 
-**連接範例（10 條線）：**
-| Wire | Source | Dest | Side |
-|------|--------|------|------|
-| 1 → 85 | 1(L) | 85(R) | L→R |
-| 85 → 41 | 85(R) | 41(B) | R→B |
-| 85 → 42 | 85(R) | 42(B) | R→B |
-| 69 → 51 | 69(R) | 51(B) | R→B |
-| 86 → 32 | 86(T) | 32(B) | T→B |
-| 91 → 22 | 91(T) | 22(B) | T→B |
-| 93 → 22 | 93(T) | 22(B) | T→B |
-| 104 → 16 | 104(T) | 16(L) | T→L |
-| 105 → 16 | 105(T) | 16(L) | T→L |
-| 101 → 106 | 101(T) | 106(T) | T→T |
+Symmetry check: if A→B and B→A both exist, draw solid line; otherwise dashed + ERROR log.
 
-### 代碼位置
+Multiple wires on same (src, dst) get parallel offsets of ±2 pts.
 
-| 功能 | 函數 | 行號 |
-|------|------|------|
-| PKG 跳過 | `generate_pkg_pdf()` | 549-550 |
-| PKG 黑色方塊 | `_draw_side_boxes()` | 616-620 |
-| APR 跳過 | `generate_apr_pdf()` | 519 |
-| D1.xx 識別 | `generate_combined_pdf()` | 444-446 |
-| Inner bond 連接邏輯 | `generate_combined_pdf()` | 514-583 |
-| 座標延伸計算 | `_extend_point_toward_center()` | 789-800 |
-| **Pin 延伸繪製（關鍵）** | **`_draw_extended_pin()`** | **802-832** |
-| 合唱線繪製 | `generate_combined_pdf()` | 581-582 |
+### Ground Symbol (DOWNBOND)
 
-### Label 字體縮小
-所有 PDF（PKG、APR、Combined）的 PIN_NAME 標籤如果會超出邊界或 header，自動縮小字體：
-- 參數：`max_label_extent` 傳入 `_draw_side_boxes()`
-- 邊界計算：根據字串長度和字體大小估算標籤範圍
-- T side 特別處理：同時檢查 header 邊界（y < 510）
-- 縮小：最大減少 2pt 字體大小（最小 2pt）
-- 適用於：所有 PDF 的 L/B/R/T 四邊
-
-## Key Pin Types
-
-### NC (No Connect)
-- PKG: 黑色方塊顯示
-- APR: 跳過不顯示
-- Wire: 不繪製
-
-### DOWNBOND
-- PKG: 藍色方塊顯示
-- APR: 跳過不顯示
-- Wire: 不繪製
-
-### POWERCUT
-- PKG: 跳過不顯示
-- APR: 黑色方塊顯示
-- Wire: 不繪製
-
-### Power/Ground Pins
-- DIRECTION = 'P': 紅色方塊
-- DIRECTION = 'G': 藍色方塊
-
-### Dynamic References (D1.xx)
-- Format: (D1.77), D1.77, D1.91
-- Reference other DIE_NUM values
-- Resolution happens during re-indexing phase
-- Updates `DIE_PAD_NUM` field
+When `PKG_NUM=0`, `DIRECTION=G`, valid `DIE_NUM`: draw ground symbol (blue triangle) extending outward from APR pin.
 
 ## PDF Generation
 
-### Package Dimensions
-- `edge_pkg = 350`: Outer PKG frame size (square)
-- `edge_apr = 200`: Inner APR frame size (square)
-- `box_len_pkg = 25`: PKG pin label box length
-- `box_len_apr = 15`: APR pin label box length
-
-### Pin Side Detection
-Side determined by cumulative PIN_NUM counts from PACKAGE header:
-```python
-pkg_str = header.get('PACKAGE', '64 16 16 16 16')  # L B R T
-pkg_parts = pkg_str.split()
-expected = {'L': int(pkg_parts[1]), 'B': int(pkg_parts[2]),
-            'R': int(pkg_parts[3]), 'T': int(pkg_parts[4])}
-cumulative = 0
-for s in ['L', 'B', 'R', 'T']:
-    cumulative += expected[s]
-    if pnum_int <= cumulative:
-        side = s
-        break
-```
-
-### Combined PDF Wiring
-Wire connects PKG pin directly to APR pin:
-- `wire_start = p_pt` (PKG pin coordinate)
-- `wire_end = a_pt` (APR pin coordinate)
-
-Wire colors: grey (default), red (P), blue (G)
-
-### APR Pins Position
-Use `label_inside=False` to place APR pins at outer edge of APR frame (outside the frame).
-
-## Sanity Check
-Validates pin count per side matches PACKAGE header:
-- Counts unique PKG_NUM per side
-- DOWNBOND PKG_NUM is included in count
-- Total must equal sum of L+B+R+T from PACKAGE header
-
-## CSV Parsing Notes
-- Use `csv.DictReader` for proper header mapping
-- Handle embedded commas in header (PACKAGE line)
-- Empty PIN_NAME shown as '-' in output (when writing .new)
-- Internal data keeps empty strings as "" for processing
-
-## Command Line Usage
-```bash
-python3 bin/ft_pad_assign.py -list <pin_list_file> -o <output_folder> -all
-```
-
-## Key Code Locations
-
-| 函數 | 行號 | 說明 |
-|------|------|------|
-| `_parse_csv()` | ~110 | CSV 格式解析 |
-| `_parse_txt()` | ~138 | Tab-separated 解析 |
-| `_reorder_and_reindex_apr_data()` | ~169 | D1.xx 動態參考解析 |
-| `_sanity_check()` | ~220 | 腳位數量驗證 |
-| `generate_apr_pdf()` | ~588 | APR PDF 生成 |
-| `generate_pkg_pdf()` | ~623 | PKG PDF 生成 |
-| `generate_combined_pdf()` | ~399 | Combined PDF + Inner bond |
-| `_draw_side_boxes()` | ~683 | 繪製框架邊緣腳位 |
-| `_extend_point_toward_center()` | ~789 | 座標向中心延伸 |
-| **`_draw_extended_pin()`** | **~802** | **延伸 pin 形狀繪製（B/T 寬度 80%）** |
-| `Writer.generate_completed_list()` | ~885 | 寫入 .new 檔案 |
-
-### _draw_extended_pin() 實現細節
-
-```python
-def _draw_extended_pin(self, c, frame_edge_pt, side, box_len, box_thickness, color):
-    """
-    參數說明（注意：B/T side 時參數含義會交換）：
-    - frame_edge_pt: (x, y) APR frame 邊界上的點
-    - side: 'L', 'B', 'R', 'T'
-    - box_len: 水平寬度（L/R side）或垂直寬度（B/T side）
-    - box_thickness: 垂直厚度（L/R side）或垂直高度（B/T side）
-    - color: 填充顏色（基於 DIRECTION：P=紅, G=藍, 其他=黑）
-    
-    實現：
-    - L/R side: 寬度 100%，線寬 0.5，空心矩形
-    - B/T side: 寬度 80%（縮小以符合標準），線寬 0.5，空心矩形
-    """
-```
-
-## Data Field Names
-Internal field names use `DIE_PAD_NUM` (not `DIE_NUM`), regardless of input format:
-- CSV column 1 → `DIE_PAD_NUM`
-- .pin_list column 1 → `DIE_PAD_NUM`
-- CSV header `DIE_NUM` or `DIE_PAD_NUM` both map to `DIE_PAD_NUM` field
-
----
-
-## 修改歷史（2026-04-23）
-
-### Inner Bond Pin 延伸修正
-
-**問題 1：B/T side 方向反向**
-- 修正前：B side 向下延伸，T side 向上延伸
-- 修正後：B side 向上延伸，T side 向下延伸（都指向 chip 中心）
-- 代碼改動：第 824-832 行，交換 B/T 的座標計算
-
-**問題 2：B/T side Pin 形狀"躺下來"**
-- 修正前：Pin 形狀變成水平（寬 > 高）
-- 修正後：Pin 形狀保持竖直（高 > 寬）
-- 根本原因：參數傳入時 box_len 和 box_thickness 含義交換
-- 代碼改動：第 826 和 832 行，交換寬度計算：`box_len` ↔ `box_thickness`
-
-**問題 3：延伸 Pin 寬度超標**
-- 修正前：寬度 = 100% 原始寬度，線寬 = 2（太粗）
-- 修正後：寬度 = 80% 原始寬度，線寬 = 0.5（細緻）
-- 代碼改動：第 815 行線寬改為 0.5；第 826、832 行寬度乘以 0.8
-
-### 修改驗證
-```
-測試檔案：examples/qfn48.8028.pin_list.csv
-輸出 PDF：combined_test_v4_80percent.pdf
-內部連接：12 條紅線，全部正確繪製
-```
-
----
-
-## 修改歷史（2026-04-24）— APR/PKG/Combined PDF 完整視覺調整
-
-### 任務背景
-用戶要求對 APR PDF、PKG PDF 和 Combined PDF 進行視覺改進，主要包括：
-1. PDF 框架尺寸調整（縮小至 80%）
-2. Pin 名稱字體統一與大小調整
-3. Combined PDF 中 APR 內框文字防止碰到 PKG 框
-4. B 邊文字 X 軸位置對齐
-
-### 修改 1：APR/PKG PDF 框架尺寸縮小至 80%
-
-**檔案**：`bin/ft_pad_assign.py`
-
-**位置**：`generate_apr_pdf()` 第 594 行、`generate_pkg_pdf()` 第 631 行
-
-```python
-# 修改前：
-edge = 350
-
-# 修改後：
-edge = 280  # 350 × 0.8 = 280
-```
-
-**效果**：
-- APR/PKG 框從 350×350 縮小至 280×280
-- Pin 位置相對不變（使用相同的 step 計算邏輯）
-- 框縮小 20%，視覺上 pin 更靠近
-
-### 修改 2：4 邊 Pin 名稱字體統一
-
-**問題根源**：
-每邊使用各自的 pin 計數計算 `step = length / (count + 1)`，導致：
-- 若不同邊 pin 數量不同 → step 不同 → font_size 不同
-- L/R/T/B 四邊字體大小不一致
-
-**解決方案**：使用最大 pin 計數計算統一 step
-
-**檔案**：`bin/ft_pad_assign.py`
-
-**修改位置**：
-
-1. `generate_apr_pdf()` 第 617-620 行：
-```python
-# 修改前：
-for side in ('L', 'B', 'R', 'T'):
-    ...
-    self._draw_side_boxes(..., l_cnt if side=='L' else ... else t_cnt, 'APR', ...)
-
-# 修改後：
-max_cnt = max(l_cnt, b_cnt, r_cnt, t_cnt)
-for side in ('L', 'B', 'R', 'T'):
-    ...
-    self._draw_side_boxes(..., max_cnt, 'APR', ...)  # 所有邊使用 max_cnt
-```
-
-2. `generate_pkg_pdf()` 第 674-677 行：同步修改為使用 `max_cnt`
-
-**驗證結果**：QFN48（每邊 12 pin）四邊字體大小視覺上統一
-
-### 修改 3：Combined PDF - APR 內框文字 X 軸對齐
-
-**問題**：APR 內框的 pin 名稱文字相對 pin shape 向右偏移
-
-**根本原因**：
-- APR pin shape 的 X 坐標範圍：px 到 px + bw
-- 文字 translate 使用 px + bw/2（pin 中心 X）
-- 導致文字向右偏
-
-**解決方案**：改為使用 px（pin 左邊界）
-
-**檔案**：`bin/ft_pad_assign.py`，`_draw_side_boxes()` 第 760 行（B 邊）
-
-```python
-# 修改前：
-c.translate(px + bw/2, py - 4)
-
-# 修改後：
-c.translate(px, py - 4)  # 改用 pin 左邊界 X 座標
-```
-
-**驗證結果**：B 邊文字現在與 pin shape 左邊界對齐
-
-### 修改 4：Combined PDF - APR 內框 Overflow 防護
-
-**問題**：Combined PDF 中，APR 內框（edge=200）的長 pin 名稱會碰到 PKG 外框（edge=350）
-
-**設計衝突**（根本原因）：
-
-| 需求 | Standalone APR PDF | Combined PDF APR |
-|------|------------------|-----------------|
-| 字體行為 | 4 邊統一，不進行 overflow 縮小 | 長文字自動縮小，避免碰到 PKG |
-| 檢查邏輯 | 跳過 overflow 檢查 | 執行 overflow 檢查 |
-
-舊代碼 `_draw_side_boxes()` 第 715 行的條件：
-```python
-if max_label_extent is not None and not (mode == 'APR' and not label_inside):
-```
-會在 `mode=='APR'` 且 `label_inside==False` 時**跳過** overflow 檢查，導致：
-- ✓ Standalone APR PDF：4 邊字體統一（沒有 overflow 縮小）
-- ✗ Combined PDF APR：標籤可以無限延伸碰到 PKG 框
-
-**解決方案**：新增 `allow_overflow` 參數區分兩種情境
-
-**修改位置 1**：`_draw_side_boxes()` 函數簽名（第 687 行）
-```python
-# 修改前：
-def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False, max_label_extent=None):
-
-# 修改後：
-def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False, max_label_extent=None, allow_overflow=False):
-```
-
-**修改位置 2**：overflow 檢查條件（第 719 行）
-```python
-# 修改前：
-if max_label_extent is not None and not (mode == 'APR' and not label_inside):
-
-# 修改後：
-if max_label_extent is not None and not allow_overflow:
-```
-
-**修改位置 3**：`generate_apr_pdf()` 呼叫加 `allow_overflow=True`（第 622 行）
-```python
-# 修改前：
-self._draw_side_boxes(c, side, data_by_side[side], ..., max_cnt, 'APR', label_inside=False, max_label_extent=limit)
-
-# 修改後：
-self._draw_side_boxes(c, side, data_by_side[side], ..., max_cnt, 'APR', label_inside=False, max_label_extent=limit, allow_overflow=True)
-```
-
-**行為矩陣**：
-| 呼叫來源 | allow_overflow | 行為 |
-|---------|---------------|------|
-| `generate_apr_pdf()` | `True` | 跳過 overflow 檢查，4 邊字體統一 ✓ |
-| `generate_combined_pdf()` APR | `False`（預設） | 執行 overflow 檢查，防止碰 PKG 框 ✓ |
-| `generate_pkg_pdf()` / combined PKG | `False`（預設） | 執行 overflow 檢查（保持原有行為） ✓ |
-
-### 技術亮點
-
-1. **代碼變更最小化**：僅 3 處修改點，保證穩定性
-2. **參數設計**：`allow_overflow` 是一個「積極選擇」（顯式允許溢出）而非「消極排除」，更清晰
-3. **向後相容**：預設 `allow_overflow=False`，不需要修改 Combined 和 PKG 的呼叫
-4. **衝突解決**：同一函數在不同上下文（standalone vs combined）有不同需求時，用參數控制策略
-
-### 實施驗證（2026-04-24）
-
-```bash
-# 測試指令
-python3 bin/ft_pad_assign.py -list examples/qfn48.8028.pin_list.csv -o test_combined_overflow -all
-
-# 生成結果
-✓ test_combined_overflow/PROJECT_QFN48_TEST__________apr.pdf (4.3K)
-✓ test_combined_overflow/PROJECT_QFN48_TEST__________pkg.pdf (3.0K)
-✓ test_combined_overflow/PROJECT_QFN48_TEST__________combined.pdf (6.7K)
-```
-
-### 測試清單
-- ✅ Standalone APR PDF：4 邊字體大小統一（無 overflow 縮小）
-- ✅ PKG PDF：4 邊字體大小統一，框縮小至 80%
-- ✅ Combined PDF：APR 內框文字不碰到 PKG 框，自動縮小超長文字
-- ✅ B 邊文字：X 軸位置與 pin shape 對齐
-- ✅ CSV 格式輸入：完全支援，測試成功
-- ✅ 所有 PDF 正確生成，無錯誤
-
-### 代碼統計
-- 修改檔案：1 個（`bin/ft_pad_assign.py`）
-- 修改行數：16 行（3 處修改點）
-- 函數簽名變更：1 個（`_draw_side_boxes()` 加參數）
-- 呼叫位置變更：2 個（`generate_apr_pdf()` / `generate_pkg_pdf()`）
-- 核心邏輯變更：1 個（overflow 檢查條件）
-
----
-
-## 修改歷史（2026-04-24）— Inner Bond 對稱性檢查與多重線
-
-### Inner Bond 對稱性規則
-
-**核心配對邏輯**：
-- `PKG_NUM=D1.90, DIE_NUM=1` 與 `PKG_NUM=D1.1, DIE_NUM=90` 是一對
-- 意思是：DIE_NUM(90) ↔ DIE_NUM(1) 雙向連接
-
-**對稱性判斷**：
-| 組合 | 類型 | 線條樣式 |
-|------|------|---------|
-| A→B 且 B→A 同時存在 | Symmetric | 實線（solid） |
-| 只有 A→B 或只有 B→A | Asymmetric | 虛線（dashed）+ ERROR |
-
-**範例**：
-```
-D1.90 + DIE_NUM=1  → source=90, dest=1
-D1.1 + DIE_NUM=90  → source=1, dest=90
-
-90→1 存在，且 1→90 也存在 → Symmetric → 實線
-```
-
-### Inner Bond 多重線偏移規則
-
-當同一個 (source, dest) 組合出現多次時，繪製多條平行線：
-
-| 出現次數 | 偏移量 | 說明 |
-|---------|--------|------|
-| 1 | 0 | 1條線，無偏移 |
-| 2 | -2, +2 | 2條線，上下分開 |
-| 3 | -4, 0, +4 | 3條線，均勻分布 |
-
-**偏移方向**：
-- L/R 邊：Y 軸偏移（上下分開）
-- B/T 邊：X 軸偏移（左右分開）
-
-**偏移計算公式**：
-```python
-offset = (i - (count - 1) / 2) * 2
-# i: 第幾條線 (0, 1, 2, ...)
-# count: 總共幾條線
-```
-
-### 代碼位置
-
-| 功能 | 函數 | 行號 |
-|------|------|------|
-| Inner Bond 分組收集 | `generate_combined_pdf()` | ~638-670 |
-| 對稱性判斷 | `generate_combined_pdf()` | ~711-713 |
-| 多重線繪製 | `generate_combined_pdf()` | ~715-743 |
-
-### 實作細節
-
-```python
-# 1. 分組統計
-direction_map = {}  # (source, dest) -> list of rows
-for row in d1xx_rows:
-    key = (source, dest)
-    direction_map[key].append(row)
-
-# 2. 檢查對稱性
-reverse_key = (dest, source)
-is_symmetric = reverse_key in direction_map
-
-# 3. 繪製多重線
-for i in range(count):
-    offset = (i - (count - 1) / 2) * 2
-    if side_src in ('L', 'R'):
-        src_x, src_y = ext_src[0], ext_src[1] + offset
-        dst_x, dst_y = ext_dst[0], ext_dst[1] + offset
-    else:
-        src_x, src_y = ext_src[0] + offset, ext_src[1]
-        dst_x, dst_y = ext_dst[0] + offset, ext_dst[1]
-```
-
----
-
-## 修改歷史（2026-04-24）— DOWNBOND 接地符號
-
-### DOWNBOND 處理規則
-
-當 `DIE_PIN_NAME=DOWNBOND` 時表示此封裝有 Downbond 方式。
-
-**接地線條件**：
-- `PKG_NUM=0`
-- `DIRECTION=G`
-- `DIE_NUM=aa` (有效的 DIE 墊片編號)
-
-**接地線數量**：
-- 根據相同的 `(DIE_NUM, DIE_PIN_NAME)` 組合出現次數決定
-- 出現 N 次 → 繪製 N 條接地線
-
-### 接地符號繪製
-
-**符號結構**：
-- 短線：從 APR pin往外延伸 12 points
-- 接地符號：倒 T 形（垂直線 + 3 條水平線）
-- 顏色：藍色 (colors.blue)
-
-**符號方向**：
-| 邊 | 方向 | 說明 |
-|----|------|------|
-| L | ← | 向左延伸 |
-| R | → | 向右延伸 |
-| B | ↓ | 向下延伸 |
-| T | ↑ | 向上延伸 |
-
-### 代碼位置
-
-| 功能 | 函數 | 行號 |
-|------|------|------|
-| 接地線收集 | `generate_combined_pdf()` | ~745-780 |
-| 接地符號繪製 | `_draw_ground_symbol()` | ~1052-1114 |
-
-### 實作細節
-
-```python
-# 收集 PKG_NUM=0 且 DIRECTION=G 的行
-ground_rows = []
-for row in self.parser.data:
-    if row['PKG_NUM'] == '0' and row['DIRECTION'] == 'G':
-        ground_rows.append(row)
-
-# 分組計算數量
-ground_counts = {}
-for row in ground_rows:
-    key = (row['DIE_NUM'], row['DIE_PIN_NAME'])
-    ground_counts[key] = ground_counts.get(key, 0) + 1
-
-# 繪製接地符號
-for (die_num, pin_name), count in ground_counts.items():
-    for i in range(count):
-        self._draw_ground_symbol(c, pt[0], pt[1], side, count, i)
-```
-
-### 接地符號符號（ground_sign.md）
-
-接地符號的標準繪製方式定義在 `ground_sign.md` 檔案中：
-- 垂直中心線
-- 空心倒三角形
-- GND 文字標註
-
----
-
-## 修改歷史（2026-04-24）— Combined PDF 位置調整
-
-### 中心點上移
-
-**修改**：將 combined PDF 的中心點 Y 座標從 240 調整為 265
-
-**原因**：避免 B 邊的字體碰到紙張底部
-
-**位置**：`generate_combined_pdf()` 第 517 行
-```python
-cx, cy = width / 2, 265  # 原本是 240
-```
-
-### 動態 APR Frame 調整策略
-
-如果 B 邊上移後 T 邊碰到 header，可以考慮：
-1. 縮小 APR frame（edge_apr）
-2. 或保持當前設置（cy=265 對 QFN48 封裝已足夠）
-
----
-
-## 完整驗證清單
-
-### Inner Bond 驗證
-- [ ] Symmetric 配對：90↔1, 75↔40 → 實線
-- [ ] Asymmetric 單向：只有 A→B → 虛線 + ERROR
-- [ ] 多重線：count=2 → 2條平行線（偏移 ±2）
-- [ ] 多重線：count=3 → 3條平行線（偏移 -4, 0, +4）
-
-### DOWNBOND 驗證
-- [ ] PKG_NUM=0, DIRECTION=G → 接地符號
-- [ ] 多重接地：count=3 → 3條平行接地線
-- [ ] 接地符號方向正確（L←, R→, B↓, T↑）
-
-### Combined PDF 驗證
-- [ ] B 邊文字不碰到紙張底部
-- [ ] T 邊文字不碰到 header
-- [ ] APR 內框文字不碰到 PKG 外框
-- [ ] 所有線條正確繪製
-
----
-
-## 指令速查
-
-```bash
-# 執行 Combined PDF 生成
-python3 bin/ft_pad_assign.py -list examples/qfn48.8028.pin_list.csv -o . -c -combined
-
-# 完整生成所有輸出
-python3 bin/ft_pad_assign.py -list <pin_list_file> -o <output_folder> -all
-
-# 測試輸出
-python3 bin/ft_pad_assign.py -list examples/example.pin_list -o output -all
-
-# 使用 make 測試所有 CSV
-make test_py
-```
-
----
-
-## 修改歷史（2026-05-02）— 完整功能更新
-
-### PKG_PIN_NAME 欄位
-
-新增 `PKG_PIN_NAME` 欄位支援，用於指定 PKG PDF 上顯示的 pin 名稱。若為空或 `-` 則 fallback 到 `DIE_PIN_NAME`。
-
-- **影響範圍**：`_draw_side_boxes()` mode='PKG' — standalone PKG PDF + Combined PDF PKG 外框
-- **代碼位置**：`_draw_side_boxes()` 第 912 行
-
-### PKG_LOC 自動補全
-
-當 `PKG_LOC` 欄位為 `-` 時，依 PACKAGE header 的 L/B/R/T 數量自動補上對應 side。補全前做總數校驗（sum vs actual），不一致報 ERROR。
-
-- **代碼位置**：`_reassign_pkg_loc()` 取代 `_auto_fill_pkg_loc()`
-
-### PKG_TOP_LEFT_PIN Ring 重排
-
-`PKG_TOP_LEFT_PIN: aa` 指定 L 邊第一根 pin。當 `aa != 1` 時：
-1. `_ring_shift_data()` — 重排 `self.data` 以 aa 為起點
-2. `_reindex_pkg_num()` — PKG_NUM 從 1 重新編號，PKG_TOP_LEFT_PIN 重置為 1
-3. `_reassign_pkg_loc()` — 全部重算 PKG_LOC
-4. `_reassign_die_loc()` — DIE_LOC 跟隨 PKG_LOC 模式（僅在 ring 被 shift 時觸發，aa=1 時維持原樣）
-5. `_sanity_check_list()` — 驗證 side 數量
-6. `_reorder_and_reindex_apr_data()` — DIE_NUM 從新 L 邊起點重排
-
-### DIE_NUM 重排修正
-
-`_reorder_and_reindex_apr_data()` 和 `bridge_data()` 不再跳過 PKG_NUM 為 `-` 的行，所有合法 DIE_NUM 參與 ring 重排。
-
-### APR PDF 顯示所有 Die Pad
-
-`generate_apr_pdf()` 和 `generate_combined_pdf()` 的 APR 收集邏輯移除 `PKG_NUM == '-'` skip，共用 die pad 也顯示。
-
-### PRODUCTION NO / PROJECT NO 相容
-
-Header regex 接受 `PRODUCTION NO`、`PRODUCTION NO.`、`PROJECT NO`、`PROJECT NO.` 四種寫法，正規化為 `PRODUCTION NO`。Prefix 尾端空白/底線自動去除。
-
-### 其他
-
-- **無 `-v` 時跳過 Innovus/ICC2**：`main()` 只在有 verilog 時產生 `.const` 檔案
-- **`.new.csv` header**：補上與 `.new` 一致的 PACKAGE/PKG_TOP_LEFT_PIN/PRODUCTION NO/VERSION 資訊（`#` 前綴）
-- **空 row 過濾**：`.new`/`.new.csv` 跳過 PKG_NUM 和 DIE_NUM 同時為 `-` 的行
-- **Makefile**：`$(wildcard examples/*.csv)` 自動發現測試檔
-
-### 新增方法一覽
-
-| 方法 | 類別 | 用途 |
-|------|------|------|
-| `_get_ring_side()` | Parser | 共用 side 計算（含 PKG_TOP_LEFT_PIN ring offset） |
-| `_ring_shift_data()` | Parser | 依 PKG_TOP_LEFT_PIN 重排 self.data |
-| `_reindex_pkg_num()` | Parser | PKG_NUM 從 1 重編 |
-| `_reassign_pkg_loc()` | Parser | 全部重算 PKG_LOC（取代 `_auto_fill_pkg_loc`） |
-| `_reassign_die_loc()` | Parser | DIE_LOC 跟隨 PKG_LOC 模式 |
-| `_parse_die_size()` | Parser | 解析 DIE_SIZE 標頭（AxB 格式，um） |
-| `_get_package_body_mm()` | PDFGen | 從 PACKAGE 查表得 body size（mm） |
-| `_compute_frame_dimensions()` | PDFGen | 計算 APR/PKG 框的實際尺寸（支援矩形） |
-| `_side_length()` | PDFGen | 根據 side 回傳對應的 edge 長度 |
-
-### 執行順序（parse_list）
-
-```
-_ring_shift_data → _reindex_pkg_num → _reassign_pkg_loc → _reassign_die_loc → _sanity_check_list → _reorder_and_reindex_apr_data → _parse_die_size
-```
-
----
-
-## 修改歷史（2026-05-04）— DIE_SIZE 標頭與框架比例縮放
-
-### 功能概述
-
-新增 `DIE_SIZE : AxB` 標頭（um 單位，A=x 寬，B=y 高），根據封裝 body size 和 die size 的比例自動縮放 PDF 框架。
-
-### 新增標頭格式
-
-```
-DIE_SIZE : 2500x2000,,,,,,,,,,,,
-```
-
-- A = die x 軸寬度（um）
-- B = die y 軸高度（um）
-- A 和 B 可以不同（支援長方形 die）
-
-### QFN 封裝 Body Size 查找表
-
-```python
-QFN_BODY_SIZES = {
-    16: 3, 20: 3, 24: 4, 28: 4, 32: 5, 36: 5,
-    40: 6, 44: 6, 48: 7, 52: 7, 56: 8,
-    64: 9, 68: 9, 72: 10, 76: 10, 88: 12, 100: 12,
-}
-```
-
-預設為 0.5mm pitch。0.4mm pitch 由 DIE_SIZE 自動推斷（當 die 大於標準 body size 時警告）。
-
-### 框架縮放邏輯
-
-| 情境 | APR 框 | PKG 框 |
-|------|--------|--------|
-| 有 DIE_SIZE | 長方形（保持 die aspect ratio，fit 在原始正方形內） | 正方形（根據 package body / die 比例縮放） |
-| 無 DIE_SIZE | 正方形（280 / 200） | 正方形（280 / 350） |
-
-**Combined PDF 範例**（DIE_SIZE=2500x2000, QFN48=7x7mm）：
-- die ratio = 2500/2000 = 1.25
-- APR 框 = 200 x 160（fit 在 200x200 正方形內）
-- PKG 框 = 350 x 350（正方形，按比例縮放）
-
-### 代碼修改位置
-
-| 功能 | 位置 | 說明 |
-|------|------|------|
-| QFN_BODY_SIZES | 模組級常數 | pin_count → body_size_mm 查找表 |
-| `_parse_csv()` regex | ~line 142 | 加入 `DIE_SIZE` 到 alternation group |
-| `_parse_txt()` regex | ~line 217 | 同上 |
-| `_parse_die_size()` | Parser class | 解析 `AxB` 格式，存入 `self.die_size` |
-| `_get_package_body_mm()` | PDFGen class | 從 PACKAGE 欄位查表得 body size |
-| `_compute_frame_dimensions()` | PDFGen class | 核心縮放邏輯：(apr_x, apr_y, pkg_x, pkg_y) |
-| `_side_length()` | PDFGen class | L/R 用 edge_y，B/T 用 edge_x |
-| `_L_pos`/`_B_pos`/`_R_pos`/`_T_pos` | PDFGen class | 支援 edge_x, edge_y 矩形 |
-| `_draw_header()` | PDFGen class | 顯示 DIE_SIZE（如果有） |
-| `_draw_scale_bar()` | PDFGen class | 右下角比例尺（顯示 pkg/die 物理尺寸） |
-| CSV header check | ~line 140 | `startswith('D1')` 改為排除 `D1` 而非 `D` |
-
-### 向後相容性
-
-- `DIE_SIZE` 為可選欄位，不影響現有 pin list
-- 無 DIE_SIZE 時所有輸出與修改前完全相同
-- Position helpers 的 `edge_y=None` 預設為 `edge_x`
-
-### 比例尺（Scale Bar）
-
-每個 PDF 右下角顯示比例尺，方便得知 pkg/die 的實際物理尺寸。
-
-**顯示內容**：
-- 比例尺線段 + 刻度（自動選擇 0.5/1/2/5/10 mm 的合適長度）
-- `PKG: 7x7 mm` — 封裝 body size
-- `Die: 2500x2000 um` — 晶粒尺寸（有 DIE_SIZE 時才顯示）
-
-**縮放計算**：
-- scale = frame_pts / physical_um
-- 比例尺長度自動選擇 30-120 pts 範圍內的 round mm 值
-
-**代碼位置**：`_draw_scale_bar()` ~line 1384
-
-### 執行順序（parse_list）
-
-```
-_ring_shift_data → _reindex_pkg_num → _reassign_pkg_loc → _reassign_die_loc → _sanity_check_list → _reorder_and_reindex_apr_data → _parse_die_size
-```
+Three modes: standalone PKG, standalone APR, Combined (PKG + APR + wires).
+
+### Frame Dimensions
+- Default: PKG=280pt square, APR=200pt square (for standalone PDFs); PKG=350pt for Combined
+- With `DIE_SIZE`: APR becomes rectangular (preserving die aspect ratio), PKG scales by body/die ratio
+- With `PKG_SIZE`: non-square PKG frames supported
+
+### Key Conventions
+- Pin side detection: cumulative counts from `PACKAGE` header (L→B→R→T order)
+- Wire colors: grey (default), red (Power `DIRECTION=P`), blue (Ground `DIRECTION=G`)
+- Label auto-shrink: if PIN_NAME text would exceed frame boundary, font shrinks (max 2pt reduction)
+- APR pins in Combined PDF: `label_inside=False` (placed at outer edge of APR frame)
+- Scale bar: bottom-right of every PDF, showing physical dimensions in um
+
+### QFN Body Size Lookup (`QFN_BODY_SIZES`, L86)
+Maps pin count → body size in mm. Used when `PKG_SIZE` header is absent. 0.5mm pitch assumed; 0.4mm pitch auto-detected when die exceeds standard body.
+
+## Output Files
+
+| Flag | Outputs |
+|------|---------|
+| `-apr` | `*_apr.pdf` |
+| `-pkg` | `*_pkg.pdf` |
+| `-combined` | `*_combined.pdf` |
+| `-c` | `*.new`, `*.new.csv`, `*_chip.inn.const`, `*_chip.icc2.const` |
+| `-stagger` | `*_stagger.rpt` |
+| `-all` | All of the above |
+
+Innovus/ICC2 constraint files only generated when `-v` (verilog) is provided.
+
+## Key Conventions
+
+- Internal field name is always `DIE_PAD_NUM` regardless of whether input uses `DIE_NUM` or `DIE_PAD_NUM`
+- Empty cells in CSV preserved as `""` internally; written as `"-"` in `.new` output
+- `PKG_LOC` auto-filled when set to `"-"` — uses PACKAGE header counts
+- `DIE_LOC` follows `PKG_LOC` pattern only when ring is shifted (`PKG_TOP_LEFT_PIN != 1`)
+- All PDF text in the tool uses ReportLab's built-in Helvetica font
+
+## Modification Changelog
+
+Detailed change history is maintained in `00README.md` (session-by-session notes).

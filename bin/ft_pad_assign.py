@@ -943,6 +943,7 @@ class PDFGen:
                 c.setStrokeColor(dir_color); c.line(wire_start[0], wire_start[1], wire_end[0], wire_end[1])
 
                 c.setFillColor(dir_color)
+                c.circle(wire_start[0], wire_start[1], 1.5, stroke=0, fill=1)
                 c.circle(wire_end[0], wire_end[1], 1.5, stroke=0, fill=1)
 
         # Draw inner bond red lines for D1.xx connections
@@ -1094,6 +1095,7 @@ class PDFGen:
 
         self._draw_center_info(c, cx, cy, min(edge_apr_x, edge_apr_y), l_cnt, b_cnt, r_cnt, t_cnt, apr_data_by_side)
         self._draw_scale_bar(c, edge_pkg_x, edge_pkg_y, 'COMBINED', width)
+        self._draw_timestamp(c)
         c.save()
 
     def generate_apr_pdf(self, filename):
@@ -1141,6 +1143,7 @@ class PDFGen:
             side_len = self._side_length(side, edge_x, edge_y)
             self._draw_side_boxes(c, side, data_by_side[side], cx, cy, side_len, getattr(self, f"_{side}_pos")(cx, cy, edge_x, edge_y), max_cnt, 'APR', label_inside=False, max_label_extent=limit, allow_overflow=True)
         self._draw_scale_bar(c, edge_x, edge_y, 'APR', width)
+        self._draw_timestamp(c)
         c.save()
 
     def generate_pkg_pdf(self, filename):
@@ -1191,6 +1194,7 @@ class PDFGen:
             side_len = self._side_length(side, edge_x, edge_y)
             self._draw_side_boxes(c, side, data_by_side[side], cx, cy, side_len, getattr(self, f"_{side}_pos")(cx, cy, edge_x, edge_y), max_cnt, 'PKG', label_inside=False, max_label_extent=limit, allow_overflow=True)
         self._draw_scale_bar(c, edge_x, edge_y, 'PKG', width)
+        self._draw_timestamp(c)
         c.save()
 
     def _L_pos(self, cx, cy, edge_x, edge_y=None): return (cx - edge_x/2, cy)
@@ -1490,6 +1494,13 @@ class PDFGen:
             info_y -= 8
         if die_size:
             c.drawRightString(rx, info_y, f"Die: {int(die_size[0])}x{int(die_size[1])} um")
+
+    def _draw_timestamp(self, c):
+        """Draw generation timestamp at bottom-left corner."""
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.setFont("Helvetica", 7)
+        c.setFillColor(colors.black)
+        c.drawString(40, 30, ts)
 
 # --- Checker Class ---
 class Checker:
