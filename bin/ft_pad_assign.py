@@ -92,6 +92,20 @@ QFN_BODY_SIZES = {
     76: 9, 88: 9,
 }
 
+# --- QFN Physical Dimensions (mm) for accurate pin drawing ---
+# Source: JEDEC MO-220 (docs/QFN40*.xlsx, docs/QFN56*.xlsx)
+# (body_mm, pitch_mm, pin_width_typ_mm, pin_length_typ_mm, exposed_pad_mm)
+QFN_PHYSICAL_SPECS = {
+    32: (5.0, 0.4, 0.20, 0.40, 3.30),
+    40: (5.0, 0.4, 0.20, 0.40, 3.30),
+    44: (6.0, 0.4, 0.20, 0.40, 4.30),
+    48: (6.0, 0.4, 0.20, 0.40, 4.30),
+    56: (6.0, 0.4, 0.20, 0.40, 4.30),
+    64: (7.0, 0.4, 0.20, 0.40, 5.30),
+    76: (9.0, 0.5, 0.25, 0.50, 7.00),
+    88: (9.0, 0.5, 0.25, 0.50, 7.00),
+}
+
 # --- Parser Class ---
 class Parser:
     def __init__(self, logger, list_file, v_files=None):
@@ -406,7 +420,16 @@ class Parser:
              self.logger.error(f"TOTAL PIN COUNT MISMATCH: PACKAGE expects {total_exp}, List has {total_act} unique pins.")
         else:
              self.logger.info(f"Total pin count check passed: {total_act} pins.")
-        
+
+        # D1.xx / (D1.xx) rows must not have PKG_PIN_NAME
+        for row in self.data:
+            pnum = row['PKG_NUM']
+            if re.match(r'^\(D1\.\d+\)$', pnum) or re.match(r'^D1\.\d+$', pnum, re.I):
+                pkg_pn = row.get('PKG_PIN_NAME', '-')
+                if pkg_pn and pkg_pn != '-':
+                    self.logger.error(f"D1.xx row (PKG_NUM={pnum}) must not have PKG_PIN_NAME '{pkg_pn}', discarding")
+                    row['PKG_PIN_NAME'] = '-'
+
         self.logger.info("Pin list sanity check complete.")
 
     def _get_ring_side(self, pnum_str):
@@ -814,6 +837,38 @@ class PDFGen:
     def _side_length(self, side, edge_x, edge_y):
         return edge_y if side in ('L', 'R') else edge_x
 
+    def _get_pin_drawing_dims(self, frame_x, frame_y, mode='PKG'):
+        """Return physical-scaled pin dimensions in points.
+
+        Returns dict: pitch, pin_len, pin_width (or None), center_pad (or None).
+        Falls back to legacy defaults when no QFN spec is available.
+        """
+        body = self._get_package_body_mm()
+        if body is None:
+            return {'pitch': None, 'pin_len': 25 if mode == 'PKG' else 15, 'pin_width': None, 'center_pad': None}
+
+        # Get total pin count from PACKAGE header
+        pkg_str = self.parser.header.get('PACKAGE', '')
+        parts = pkg_str.split()
+        try:
+            total_pins = sum(int(p) for p in parts[1:5]) if len(parts) >= 5 else 0
+        except (ValueError, IndexError):
+            total_pins = 0
+
+        spec = QFN_PHYSICAL_SPECS.get(total_pins)
+        if spec:
+            body_mm, pitch_mm, pw_mm, pl_mm, cp_mm = spec
+            pts_per_mm = frame_x / (body_mm * 1000) if body_mm > 0 else 0.056
+            return {
+                'pitch': pitch_mm * 1000 * pts_per_mm,
+                'pin_len': pl_mm * 1000 * pts_per_mm,
+                'pin_width': pw_mm * 1000 * pts_per_mm,
+                'center_pad': cp_mm * 1000 * pts_per_mm,
+            }
+
+        # Fallback: body known but pin count not in spec table
+        return {'pitch': None, 'pin_len': 25 if mode == 'PKG' else 15, 'pin_width': None, 'center_pad': None}
+
     def generate_combined_pdf(self, filename):
         if not HAS_REPORTLAB:
             self.logger.error("ReportLab is not installed.")
@@ -846,8 +901,10 @@ class PDFGen:
 
             # PKG side (Uses current PIN_NUM order)
             # DOWNBOND should be included in PKG (even though DIE_NUM=0)
+            pkg_pn = row.get('PKG_PIN_NAME', '-')
             if p_loc in pkg_data_by_side:
                 if (pname != 'DOWNBOND' and pnum in ('0', '-', 'NC')) or 'POWERCUT' in pname: pass
+                elif pname != 'DOWNBOND' and (not pkg_pn or pkg_pn == '-'): pass
                 else:
                     if pnum not in seen_pnums:
                         pkg_data_by_side[p_loc].append(row)
@@ -891,22 +948,40 @@ class PDFGen:
         edge_apr_x, edge_apr_y, edge_pkg_x, edge_pkg_y = self._compute_frame_dimensions(200, 350)
         c.setLineWidth(2)
         c.rect(cx - edge_pkg_x/2, cy - edge_pkg_y/2, edge_pkg_x, edge_pkg_y)
+        self._draw_corner_indicators(c, cx, cy, edge_pkg_x, edge_pkg_y)
+        pin_dims_pkg = self._get_pin_drawing_dims(edge_pkg_x, edge_pkg_y, 'PKG')
+        if pin_dims_pkg.get('center_pad'):
+            self._draw_center_pad(c, cx, cy, pin_dims_pkg['center_pad'])
         c.rect(cx - edge_apr_x/2, cy - edge_apr_y/2, edge_apr_x, edge_apr_y)
 
         pkg_coords, apr_coords = {}, {}
         pkg_edge = {'L': cx - edge_pkg_x/2, 'R': cx + edge_pkg_x/2, 'B': cy - edge_pkg_y/2, 'T': cy + edge_pkg_y/2}
         pkg_margin = 8
-        pkg_lim = {'L': pkg_edge['L'] + pkg_margin, 'R': pkg_edge['R'] - pkg_margin,
-                   'B': pkg_edge['B'] + pkg_margin, 'T': pkg_edge['T'] - pkg_margin}
+        # PKG pin boundary limits: APR label must not extend past PKG pin inner edge
+        # L/B: limit = inner boundary toward frame edge (label extends left/down toward it)
+        # R/T: limit = inner boundary toward center (label extends right/up toward it)
+        pkg_pin_len = pin_dims_pkg.get('pin_len', 25) if pin_dims_pkg else 25
+        apr_lim = {
+            'L': pkg_edge['L'] + pkg_pin_len + pkg_margin,
+            'R': pkg_edge['R'] - pkg_pin_len - pkg_margin,
+            'B': pkg_edge['B'] + pkg_pin_len + pkg_margin,
+            'T': min(pkg_edge['T'] - pkg_pin_len - pkg_margin, 510),
+        }
 
         # Use max pin count for uniform font size across all 4 sides (PKG + APR)
         max_cnt = max(l_cnt, b_cnt, r_cnt, t_cnt)
+        # APR pin size: 100um physical, scaled to frame
+        die_size = self.parser.die_size
+        if die_size:
+            apr_pin_sz = 100.0 * edge_apr_x / max(die_size[0], die_size[1])
+        else:
+            apr_pin_sz = 6
         for side in ('L', 'B', 'R', 'T'):
             pkg_len = self._side_length(side, edge_pkg_x, edge_pkg_y)
             apr_len = self._side_length(side, edge_apr_x, edge_apr_y)
-            p_coords = self._draw_side_boxes(c, side, pkg_data_by_side[side], cx, cy, pkg_len, getattr(self, f"_{side}_pos")(cx, cy, edge_pkg_x, edge_pkg_y), max_cnt, 'PKG', label_inside=False)
+            p_coords = self._draw_side_boxes(c, side, pkg_data_by_side[side], cx, cy, pkg_len, getattr(self, f"_{side}_pos")(cx, cy, edge_pkg_x, edge_pkg_y), max_cnt, 'PKG', label_inside=False, pin_dims=pin_dims_pkg, pin_inside=True)
             pkg_coords.update(p_coords)
-            a_coords = self._draw_side_boxes(c, side, apr_data_by_side[side], cx, cy, apr_len, getattr(self, f"_{side}_pos")(cx, cy, edge_apr_x, edge_apr_y), max_cnt, 'APR', label_inside=False, max_label_extent=pkg_lim[side], hollow_pg=True, skip_start_dot=True)
+            a_coords = self._draw_side_boxes(c, side, apr_data_by_side[side], cx, cy, apr_len, getattr(self, f"_{side}_pos")(cx, cy, edge_apr_x, edge_apr_y), max_cnt, 'APR', label_inside=False, max_label_extent=apr_lim[side], hollow_pg=True, skip_start_dot=True, pin_inside=True, apr_pin_size=apr_pin_sz)
             apr_coords.update(a_coords)
 
         c.setLineWidth(0.3)
@@ -920,20 +995,36 @@ class PDFGen:
                 # Determine which side based on PIN_NUM location (with ring offset)
                 side = self.parser._get_ring_side(row['PKG_NUM'])
 
-                wire_start = p_pt['pt']
+                # PKG pin center: pin_inside=True, pin extends inward from frame edge
+                p_cx, p_cy = p_pt['pt']
+                p_bw, p_bh = p_pt['bw'], p_pt['bh']
+                p_side = p_pt['side']
+                if p_side == 'L':
+                    wire_start = (p_cx + p_bw/2, p_cy)
+                elif p_side == 'R':
+                    wire_start = (p_cx - p_bw/2, p_cy)
+                elif p_side == 'B':
+                    wire_start = (p_cx, p_cy + p_bh/2)
+                elif p_side == 'T':
+                    wire_start = (p_cx, p_cy - p_bh/2)
+                else:
+                    wire_start = p_pt['pt']
 
                 a_side = a_pt['side']
                 a_wedge = a_pt['pt']
                 a_bw = a_pt['bw']
                 a_bh = a_pt['bh']
+                # APR pin center: pin_inside=True means pin extends inward from frame edge
+                # 'pt' is at frame edge; actual center is box_len/2 inward
+                pin_cx, pin_cy = a_wedge
                 if a_side == 'L':
-                    wire_end = (a_wedge[0] - a_bw/2, a_wedge[1])
+                    wire_end = (pin_cx + a_bw/2, pin_cy)
                 elif a_side == 'R':
-                    wire_end = (a_wedge[0] + a_bw/2, a_wedge[1])
+                    wire_end = (pin_cx - a_bw/2, pin_cy)
                 elif a_side == 'B':
-                    wire_end = (a_wedge[0], a_wedge[1] - a_bh/2)
+                    wire_end = (pin_cx, pin_cy + a_bh/2)
                 elif a_side == 'T':
-                    wire_end = (a_wedge[0], a_wedge[1] + a_bh/2)
+                    wire_end = (pin_cx, pin_cy - a_bh/2)
                 else:
                     wire_end = a_wedge
 
@@ -1077,14 +1168,15 @@ class PDFGen:
             bh = apr_pin['bh']
             side = apr_pin['side']
 
+            # pin_inside=True: pin extends inward, center is at pt + half-dimension
             if side == 'L':
-                cx_c, cy_c = pt[0] - bw / 2, pt[1]
-            elif side == 'R':
                 cx_c, cy_c = pt[0] + bw / 2, pt[1]
+            elif side == 'R':
+                cx_c, cy_c = pt[0] - bw / 2, pt[1]
             elif side == 'B':
-                cx_c, cy_c = pt[0], pt[1] - bh / 2
-            elif side == 'T':
                 cx_c, cy_c = pt[0], pt[1] + bh / 2
+            elif side == 'T':
+                cx_c, cy_c = pt[0], pt[1] - bh / 2
             else:
                 continue
 
@@ -1137,11 +1229,17 @@ class PDFGen:
         header_bottom = 510
         # For APR, use max pin count to ensure uniform font size across all 4 sides
         max_cnt = max(l_cnt, b_cnt, r_cnt, t_cnt)
+        # APR pin size: 50um physical, scaled to frame
+        die_size = self.parser.die_size
+        if die_size:
+            apr_pin_sz = 100.0 * edge_x / max(die_size[0], die_size[1])
+        else:
+            apr_pin_sz = 6
         for side in ('L', 'B', 'R', 'T'):
             limit = apr_edge[side]
             if side == 'T': limit = header_bottom
             side_len = self._side_length(side, edge_x, edge_y)
-            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, side_len, getattr(self, f"_{side}_pos")(cx, cy, edge_x, edge_y), max_cnt, 'APR', label_inside=False, max_label_extent=limit, allow_overflow=True)
+            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, side_len, getattr(self, f"_{side}_pos")(cx, cy, edge_x, edge_y), max_cnt, 'APR', label_inside=False, max_label_extent=limit, allow_overflow=True, pin_inside=True, apr_pin_size=apr_pin_sz)
         self._draw_scale_bar(c, edge_x, edge_y, 'APR', width)
         self._draw_timestamp(c)
         c.save()
@@ -1153,13 +1251,18 @@ class PDFGen:
         cx, cy = width/2, 255; self._draw_header(c, "PACKAGE PIN DIAGRAM", width, height)
         _, _, edge_x, edge_y = self._compute_frame_dimensions(280, 280)
         c.setLineWidth(2); c.rect(cx - edge_x/2, cy - edge_y/2, edge_x, edge_y)
+        self._draw_corner_indicators(c, cx, cy, edge_x, edge_y)
+        pin_dims = self._get_pin_drawing_dims(edge_x, edge_y, 'PKG')
+        if pin_dims.get('center_pad'):
+            self._draw_center_pad(c, cx, cy, pin_dims['center_pad'])
         pkg_data = {}; order = []
         for row in self.parser.data:
             pnum = row['PKG_NUM']
             pname = row['DIE_PIN_NAME'].upper()
-            # Skip: POWERCUT, but NOT NC (NC should show on PKG) and NOT DOWNBOND
-            if 'POWERCUT' in pname: continue
-            if pnum in ('0', '-'): continue
+            pkg_pn = row.get('PKG_PIN_NAME', '-')
+            # Same rules as Combined PDF PKG side
+            if (pname != 'DOWNBOND' and pnum in ('0', '-', 'NC')) or 'POWERCUT' in pname: continue
+            if pname != 'DOWNBOND' and (not pkg_pn or pkg_pn == '-'): continue
             if pnum not in pkg_data: pkg_data[pnum] = row.copy(); order.append(pnum)
         data_by_side = {'L': [], 'B': [], 'R': [], 'T': []}
         for pnum in order:
@@ -1183,7 +1286,8 @@ class PDFGen:
         pkg_str = self.parser.header.get('PACKAGE', '64 16 16 16 16')
         parts = pkg_str.split()
         l_cnt, b_cnt, r_cnt, t_cnt = map(int, parts[1:5]) if len(parts) >= 5 else (16, 16, 16, 16)
-        self._draw_center_info(c, cx, cy, min(edge_x, edge_y), l_cnt, b_cnt, r_cnt, t_cnt, data_by_side)
+        info_cy = cy + (pin_dims['center_pad'] / 2 + 10 if pin_dims.get('center_pad') else 0)
+        self._draw_center_info(c, cx, info_cy, min(edge_x, edge_y), l_cnt, b_cnt, r_cnt, t_cnt, data_by_side)
         pkg_edge = {'L': cx - edge_x/2, 'R': cx + edge_x/2, 'B': cy - edge_y/2, 'T': cy + edge_y/2}
         header_bottom = 510
         # For PKG, use max pin count to ensure uniform font size across all 4 sides
@@ -1192,7 +1296,7 @@ class PDFGen:
             limit = pkg_edge[side]
             if side == 'T': limit = header_bottom
             side_len = self._side_length(side, edge_x, edge_y)
-            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, side_len, getattr(self, f"_{side}_pos")(cx, cy, edge_x, edge_y), max_cnt, 'PKG', label_inside=False, max_label_extent=limit, allow_overflow=True)
+            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, side_len, getattr(self, f"_{side}_pos")(cx, cy, edge_x, edge_y), max_cnt, 'PKG', label_inside=False, max_label_extent=limit, allow_overflow=True, pin_dims=pin_dims, pin_inside=True)
         self._draw_scale_bar(c, edge_x, edge_y, 'PKG', width)
         self._draw_timestamp(c)
         c.save()
@@ -1202,45 +1306,71 @@ class PDFGen:
     def _R_pos(self, cx, cy, edge_x, edge_y=None): return (cx + edge_x/2, cy)
     def _T_pos(self, cx, cy, edge_x, edge_y=None): return (cx, cy + (edge_y or edge_x)/2)
 
-    def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False, max_label_extent=None, allow_overflow=False, hollow_pg=False, skip_start_dot=False):
+    def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False, max_label_extent=None, allow_overflow=False, hollow_pg=False, skip_start_dot=False, pin_dims=None, pin_inside=False, apr_pin_size=None):
         bx, by = b_pos; coords = {}
         if not pins: return coords
-        actual_cnt = len(pins); calc_total = max(actual_cnt, total); step = length / (calc_total + 1)
-        box_thickness = max(1, min(step * 0.8, 6)); font_size = max(2, min(step * 0.9, 8))
+        actual_cnt = len(pins); calc_total = max(actual_cnt, total)
+        # Use physical pitch for step when available, center pins on side for proper corner gaps
+        if pin_dims and pin_dims.get('pitch') is not None:
+            step = pin_dims['pitch']
+            margin = (length - (actual_cnt - 1) * step) / 2
+            # Ensure corner pins have enough space at frame corners (JEDEC MO-220)
+            # Pull corner pins inward by 0.5×pitch beyond natural centering
+            if pin_dims.get('pitch') is not None:
+                min_margin = pin_dims['pitch'] * 1.5
+                margin = max(margin, min_margin)
+                # Recalculate step to keep pins centered with new margin
+                step = (length - 2 * margin) / max(1, actual_cnt - 1)
+            font_step = step
+        else:
+            step = length / (calc_total + 1)
+            margin = step
+            # Corner pin pullback: ensure pins don't touch at frame corners
+            min_margin = step * 1.5
+            margin = max(margin, min_margin)
+            step = (length - 2 * margin) / max(1, actual_cnt - 1)
+            font_step = step
+        font_size = max(2, min(font_step * 0.9, 8))
         if mode == 'PKG': font_size = min(font_size + 1, 10)
-        box_len = 15 if mode == 'APR' else 25
+        if pin_dims and pin_dims.get('pin_width') is not None:
+            box_thickness = min(pin_dims['pin_width'], step * 0.9)
+            box_len = pin_dims['pin_len']
+        else:
+            box_thickness = max(1, min(step * 0.8, 6))
+            box_len = (apr_pin_size or 6) if mode == 'APR' else 25
         for idx, pin in enumerate(pins, 1):
+            pname = pin['DIE_PIN_NAME']
             if mode == 'PKG':
                 pkg_pin = pin.get('PKG_PIN_NAME', '-')
-                pname = pkg_pin if pkg_pin and pkg_pin != '-' else pin['DIE_PIN_NAME']
+                display_name = pkg_pin if pkg_pin and pkg_pin != '-' else pname
             else:
-                pname = pin['DIE_PIN_NAME']
-            display_name = pname
-            if '%' in pname:
-                display_name = pname.split('%')[-1] if mode == 'APR' else pname.split('%')[0]
-                if not display_name: display_name = pname
+                display_name = pname.split('%', 1)[0] if '%' in pname else pname
             px, py = 0, 0; bw, bh = 0, 0
             if side == 'L':
-                bw, bh = box_len, box_thickness; px = bx - (0 if label_inside else bw); py = (by + length/2) - (idx * step) - (bh/2)
+                bw, bh = box_len, box_thickness
+                px = bx if pin_inside else (bx - (0 if label_inside else bw))
+                py = (by + length/2) - margin - ((idx - 1) * step) - (bh/2)
                 coords[pin['PKG_NUM'] if mode == 'PKG' else pin['DIE_NUM']] = {'pt': (bx, py + bh/2), 'bw': bw, 'bh': bh, 'side': side}
             elif side == 'B':
-                bw, bh = box_thickness, box_len; px = (bx - length/2) + (idx * step) - (bw/2); py = by - (0 if label_inside else bh)
+                bw, bh = box_thickness, box_len
+                px = (bx - length/2) + margin + ((idx - 1) * step) - (bw/2)
+                py = by if pin_inside else (by - (0 if label_inside else bh))
                 coords[pin['PKG_NUM'] if mode == 'PKG' else pin['DIE_NUM']] = {'pt': (px + bw/2, by), 'bw': bw, 'bh': bh, 'side': side}
             elif side == 'R':
-                bw, bh = box_len, box_thickness; px = bx - (bw if label_inside else 0); py = (by - length/2) + (idx * step) - (bh/2)
+                bw, bh = box_len, box_thickness
+                px = bx - bw if pin_inside else (bx - (bw if label_inside else 0))
+                py = (by - length/2) + margin + ((idx - 1) * step) - (bh/2)
                 coords[pin['PKG_NUM'] if mode == 'PKG' else pin['DIE_NUM']] = {'pt': (bx, py + bh/2), 'bw': bw, 'bh': bh, 'side': side}
             elif side == 'T':
-                bw, bh = box_thickness, box_len; px = (bx + length/2) - (idx * step) - (bw/2); py = by - (bh if label_inside else 0)
+                bw, bh = box_thickness, box_len
+                px = (bx + length/2) - margin - ((idx - 1) * step) - (bw/2)
+                py = by - bh if pin_inside else (by - (bh if label_inside else 0))
                 coords[pin['PKG_NUM'] if mode == 'PKG' else pin['DIE_NUM']] = {'pt': (px + bw/2, by), 'bw': bw, 'bh': bh, 'side': side}
             c.setLineWidth(0.5); c.setStrokeColor(colors.black); direction = pin['DIRECTION']
             if 'POWERCUT' in pname.upper(): c.setFillColor(colors.black); c.rect(px, py, bw, bh, fill=1)
             elif pname.upper() == 'NC': c.setFillColor(colors.black); c.rect(px, py, bw, bh, fill=1)
-            elif direction == 'P':
-                if hollow_pg: c.setStrokeColor(colors.red); c.rect(px, py, bw, bh, fill=0)
-                else: c.setFillColor(colors.red); c.rect(px, py, bw, bh, fill=1)
-            elif direction == 'G':
-                if hollow_pg: c.setStrokeColor(colors.blue); c.rect(px, py, bw, bh, fill=0)
-                else: c.setFillColor(colors.blue); c.rect(px, py, bw, bh, fill=1)
+            elif direction == 'P': c.setStrokeColor(colors.red); c.setLineWidth(1.0); c.rect(px, py, bw, bh, fill=0)
+            elif direction == 'G': c.setStrokeColor(colors.blue); c.setLineWidth(1.0); c.rect(px, py, bw, bh, fill=0)
             else: c.rect(px, py, bw, bh, fill=0)
             c.setFillColor(colors.black)
             small_font = font_size
@@ -1304,10 +1434,12 @@ class PDFGen:
                 if n_int == 1 or n_int % 5 == 0:
                     c.setFont("Helvetica", font_size)
                     c.setFillColor(colors.black)
-                    if side == 'L': c.drawString(bx + 2, py + (bh/2) - (font_size/2), num_str)
-                    elif side == 'R': c.drawRightString(bx - 2, py + (bh/2) - (font_size/2), num_str)
-                    elif side == 'T': c.drawCentredString(px + bw/2, by - font_size, num_str)
-                    elif side == 'B': c.drawCentredString(px + bw/2, by + 2, num_str) # Fixed numbering position
+                    # APR pin_inside: number shifts past pin shape to avoid overlap
+                    n_off = (bw if side in ('L', 'R') else bh) if (mode == 'APR' and pin_inside) else 0
+                    if side == 'L': c.drawString(bx + 2 + n_off, py + (bh/2) - (font_size/2), num_str)
+                    elif side == 'R': c.drawRightString(bx - 2 - n_off, py + (bh/2) - (font_size/2), num_str)
+                    elif side == 'T': c.drawCentredString(px + bw/2, by - font_size - n_off, num_str)
+                    elif side == 'B': c.drawCentredString(px + bw/2, by + 2 + n_off, num_str)
             except (ValueError, TypeError):
                 pass
         return coords
@@ -1375,8 +1507,9 @@ class PDFGen:
         else:
             ax, ay = cx + offset, cy  # horizontal spread
 
-        c.setStrokeColor(colors.blue)
-        c.setFillColor(colors.blue)
+        light_blue = colors.Color(0, 0, 0.8, 0.35)
+        c.setStrokeColor(light_blue)
+        c.setFillColor(light_blue)
         c.setLineWidth(1.0)
 
         # Anchor dot
@@ -1428,6 +1561,37 @@ class PDFGen:
         c.drawCentredString(cx, cy + spacing, f"Project: {h.get('PRODUCTION NO.', h.get('PRODUCTION NO', 'N/A'))}")
         c.drawCentredString(cx, cy, f"Package: {h.get('PACKAGE', 'N/A')}")
         c.drawCentredString(cx, cy - spacing, f"Version: {h.get('VERSION', 'N/A')}")
+
+    def _draw_center_pad(self, c, cx, cy, pad_size_pts, label="GND"):
+        """Draw a dashed rectangle for the center exposed/thermal pad."""
+        half = pad_size_pts / 2
+        light = colors.Color(0.55, 0.55, 0.55, 0.3)
+        c.saveState()
+        c.setDash([3, 3])
+        c.setLineWidth(0.8)
+        c.setStrokeColor(light)
+        c.rect(cx - half, cy - half, pad_size_pts, pad_size_pts, fill=0, stroke=1)
+        c.setDash([])
+        c.restoreState()
+        font_size = max(5, min(pad_size_pts * 0.12, 12))
+        c.setFont("Helvetica", font_size)
+        c.setFillColor(light)
+        c.drawCentredString(cx, cy - font_size / 2, label)
+
+    def _draw_corner_indicators(self, c, cx, cy, edge_x, edge_y, arm_length=8):
+        """Draw L-shaped corner indicators at all 4 corners of the PKG frame."""
+        half_x, half_y = edge_x / 2, edge_y / 2
+        corners = [
+            (cx - half_x, cy + half_y, arm_length, arm_length),    # TL: right + down
+            (cx + half_x, cy + half_y, -arm_length, arm_length),   # TR: left + down
+            (cx - half_x, cy - half_y, arm_length, -arm_length),   # BL: right + up
+            (cx + half_x, cy - half_y, -arm_length, -arm_length),  # BR: left + up
+        ]
+        for i, (x, y, dx, dy) in enumerate(corners):
+            c.setLineWidth(1.5 if i == 0 else 1.0)
+            c.setStrokeColor(colors.black)
+            c.line(x, y, x + dx, y)
+            c.line(x, y, x, y + dy)
 
     def _draw_scale_bar(self, c, frame_x, frame_y, mode, page_width):
         """Draw a scale bar at bottom-right showing physical size reference.
@@ -1530,9 +1694,41 @@ class Checker:
 
 # --- Writer Class ---
 class Writer:
+    # Fixed header order for .new / .new.csv output
+    HEADER_ORDER = ['PROJECT NO', 'PKG_TOP_LEFT_PIN', 'PACKAGE', 'VERSION', 'PKG_SIZE', 'DIE_SIZE']
+
     def __init__(self, logger, parser):
         self.logger = logger
         self.parser = parser
+
+    def _build_ordered_header(self):
+        """Build ordered header list with defaults for missing keys."""
+        h = dict(self.parser.header)
+
+        # Normalize: PRODUCTION NO → PROJECT NO
+        if 'PROJECT NO' not in h and 'PRODUCTION NO' in h:
+            h['PROJECT NO'] = h['PRODUCTION NO']
+
+        # Defaults
+        h.setdefault('PROJECT NO', 'UNKNOWN')
+        h.setdefault('PKG_TOP_LEFT_PIN', '1')
+        h.setdefault('VERSION', 'N/A')
+
+        # PKG_SIZE: derive from QFN_BODY_SIZES if missing
+        if 'PKG_SIZE' not in h:
+            pkg_str = h.get('PACKAGE', '')
+            m = re.match(r'(\d+)', pkg_str)
+            if m:
+                pin_count = int(m.group(1))
+                body_mm = QFN_BODY_SIZES.get(pin_count)
+                if body_mm:
+                    body_um = int(body_mm * 1000)
+                    h['PKG_SIZE'] = f"{body_um}x{body_um}"
+
+        result = []
+        for k in self.HEADER_ORDER:
+            result.append((k, h.get(k, '')))
+        return result
 
     def generate_completed_list(self, filename):
         self.logger.info(f"Generating completed list: {filename}")
@@ -1541,8 +1737,8 @@ class Writer:
             h = ['PKG_NUM', 'PKG_PIN_NAME', 'DIE_NUM', 'DIE_PIN_NAME', 'IO_CELL_NAME', 'PKG_LOC', 'DIE_LOC', 'DIRECTION', 'LOAD', 'SLEW', 'SSO']
             
             with open(filename, 'w') as f:
-                for k, v in sorted(self.parser.header.items()):
-                    f.write(f"{k:<20} : {v}\n")
+                for k, v in self._build_ordered_header():
+                    f.write(f"{k} : {v}\n")
                 f.write("\n")
                 
                 # Format header row (11 columns: PKG_NUM, PKG_PIN_NAME, DIE_NUM, DIE_PIN_NAME, IO_CELL_NAME, PKG_LOC, DIE_LOC, DIRECTION, LOAD, SLEW, SSO)
@@ -1578,8 +1774,8 @@ class Writer:
                  'IO_CELL_NAME', 'PKG_LOC', 'DIE_LOC', 'DIRECTION', 'LOAD', 'SLEW', 'SSO']
 
             with open(filename, 'w', newline='') as f:
-                for k, v in sorted(self.parser.header.items()):
-                    f.write(f"# {k} : {v}\n")
+                for k, v in self._build_ordered_header():
+                    f.write(f"{k} : {v}\n")
                 f.write("\n")
                 writer = csv.DictWriter(f, fieldnames=h)
                 writer.writeheader()
