@@ -139,6 +139,7 @@ class Parser:
             self._sanity_check_list()
             self._reorder_and_reindex_apr_data()
             self._parse_die_size()
+            self._extract_cell_from_pin_name()
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -317,8 +318,8 @@ class Parser:
 
         # 2. Re-indexing logic: sort by DIE_LOC (L→B→R→T), then assign 1,2,3,...
         SIDE_ORDER = {'L': 0, 'B': 1, 'R': 2, 'T': 3}
-        reindexable = []  # (side_order, orig_die_num_int, row)
-        for row in self.data:
+        reindexable = []  # (side_order, row_index, orig_die_num_str, row)
+        for row_idx, row in enumerate(self.data):
             if row['PKG_NUM'].upper() == 'INNER_BOND' or row['DIE_NUM'] == '-':
                 continue
             if row['DIE_PIN_NAME'].upper() == 'NC' or row['DIE_NUM'] == '0':
@@ -327,21 +328,33 @@ class Parser:
             die_loc = row['DIE_LOC'].upper()
             if die_loc not in SIDE_ORDER:
                 continue
-            try:
-                orig_int = int(row['DIE_NUM'])
-            except (ValueError, TypeError):
+            if row['DIE_NUM'] in ('', '-'):
                 continue
-            reindexable.append((SIDE_ORDER[die_loc], orig_int, row))
+            reindexable.append((SIDE_ORDER[die_loc], row_idx, row['DIE_NUM'], row))
 
         if not reindexable:
             self.logger.warn("No reindexable DIE_NUM found, DIE_NUM reindexing skipped.")
         else:
-            # Sort by DIE_LOC side order, then by original DIE_NUM within each side
-            reindexable.sort(key=lambda x: (x[0], x[1]))
+            # Find the CSV row index of the first L-side reindexable entry.
+            # T-side rows that appear before this index are the "wraparound" tail of
+            # the ring and must be numbered after all other T-side rows.
+            l_start = next((ri for _, ri, _, r in reindexable if r['DIE_LOC'].upper() == 'L'), None)
+            n = len(self.data)
+
+            def sort_key(entry):
+                side_ord, ri, _, r = entry
+                # T-side rows before the first L-side entry are ring-tail; push them
+                # to the very end by inflating their row index.
+                if l_start is not None and side_ord == SIDE_ORDER['T'] and ri < l_start:
+                    return (side_ord, n + ri)
+                return (side_ord, ri)
+
+            # Sort by DIE_LOC side order, then by CSV row order within each side.
+            # Row order preserves PKG ring order; original DIE_NUM value is not used.
+            reindexable.sort(key=sort_key)
             idx = 1
             orig_to_new = {}
-            for _, orig_die, row in reindexable:
-                orig_die_str = str(orig_die)
+            for _, _row_idx, orig_die_str, row in reindexable:
                 if orig_die_str in orig_to_new:
                     row['DIE_NUM'] = orig_to_new[orig_die_str]
                 else:
@@ -365,6 +378,21 @@ class Parser:
 
     def _sanity_check_list(self):
         self.logger.info("Performing Sanity Check on Pin List...")
+        # 0. Normalize: PKG_PIN_NAME='NC'/'DOWNBOND' propagates to DIE_PIN_NAME and forces DIE_NUM='0'
+        for row in self.data:
+            pkg_pn = row.get('PKG_PIN_NAME', '-')
+            if not pkg_pn or pkg_pn == '-':
+                continue
+            pkg_pn_upper = pkg_pn.upper()
+            if pkg_pn_upper not in ('NC', 'DOWNBOND'):
+                continue
+            if row['DIE_PIN_NAME'].upper() != pkg_pn_upper:
+                self.logger.info(f"PKG_PIN_NAME='{pkg_pn}' → DIE_PIN_NAME overridden (PKG_NUM={row['PKG_NUM']}, was '{row['DIE_PIN_NAME']}')")
+                row['DIE_PIN_NAME'] = pkg_pn_upper
+            if row['DIE_NUM'] != '0':
+                self.logger.info(f"PKG_PIN_NAME='{pkg_pn}' → DIE_NUM forced to '0' (PKG_NUM={row['PKG_NUM']}, was '{row['DIE_NUM']}')")
+                row['DIE_NUM'] = '0'
+
         # 1. Package Side Count Verification
         pkg_str = self.header.get('PACKAGE', '')
         if not pkg_str:
@@ -421,14 +449,32 @@ class Parser:
         else:
              self.logger.info(f"Total pin count check passed: {total_act} pins.")
 
-        # D1.xx / (D1.xx) rows must not have PKG_PIN_NAME
+        # PKG_NUM=0 / D1.xx / (D1.xx) rows must not have PKG_PIN_NAME
         for row in self.data:
             pnum = row['PKG_NUM']
-            if re.match(r'^\(D1\.\d+\)$', pnum) or re.match(r'^D1\.\d+$', pnum, re.I):
-                pkg_pn = row.get('PKG_PIN_NAME', '-')
-                if pkg_pn and pkg_pn != '-':
-                    self.logger.error(f"D1.xx row (PKG_NUM={pnum}) must not have PKG_PIN_NAME '{pkg_pn}', discarding")
-                    row['PKG_PIN_NAME'] = '-'
+            pkg_pn = row.get('PKG_PIN_NAME', '-')
+            if not (pkg_pn and pkg_pn != '-'):
+                continue
+            if pnum == '0':
+                self.logger.warn(f"PKG_NUM=0 row (DIE_PIN_NAME={row['DIE_PIN_NAME']}) must not have PKG_PIN_NAME '{pkg_pn}', discarding")
+                row['PKG_PIN_NAME'] = '-'
+            elif re.match(r'^\(D1\.\d+\)$', pnum) or re.match(r'^D1\.\d+$', pnum, re.I):
+                self.logger.warn(f"D1.xx row (PKG_NUM={pnum}) must not have PKG_PIN_NAME '{pkg_pn}', discarding")
+                row['PKG_PIN_NAME'] = '-'
+
+        # DIE_NUM=0 or '-' rows must not have DIE_PIN_NAME (NC and DOWNBOND are expected exceptions)
+        _VALID_ZERO_DIE_NAMES = {'NC', 'DOWNBOND'}
+        for row in self.data:
+            die_num = row['DIE_NUM']
+            if die_num not in ('0', '-'):
+                continue
+            die_pn = row['DIE_PIN_NAME']
+            if not die_pn or die_pn == '-':
+                continue
+            if die_pn.upper() in _VALID_ZERO_DIE_NAMES:
+                continue
+            self.logger.warn(f"DIE_NUM={die_num} row (PKG_NUM={row['PKG_NUM']}) must not have DIE_PIN_NAME '{die_pn}', discarding")
+            row['DIE_PIN_NAME'] = '-'
 
         self.logger.info("Pin list sanity check complete.")
 
@@ -759,6 +805,19 @@ class Parser:
         self.die_size = (float(m.group(1)), float(m.group(2)))
         self.logger.info(f"DIE_SIZE parsed: {self.die_size[0]}x{self.die_size[1]} um")
 
+    def _extract_cell_from_pin_name(self):
+        # PIN_NAME with %C% encoding: "VDD11%C%U_TOP/U_VDD11_APR0"
+        # APR display uses the part before first %, IO_CELL_NAME comes from the part after last %
+        for row in self.data:
+            pname = row['DIE_PIN_NAME']
+            if '%' not in pname:
+                continue
+            if row['IO_CELL_NAME'] not in ('-', ''):
+                continue
+            cell = pname.split('%')[-1]
+            if cell:
+                row['IO_CELL_NAME'] = cell
+
 # --- PDF Generator Class ---
 class PDFGen:
     def __init__(self, logger, parser):
@@ -903,8 +962,8 @@ class PDFGen:
             # DOWNBOND should be included in PKG (even though DIE_NUM=0)
             pkg_pn = row.get('PKG_PIN_NAME', '-')
             if p_loc in pkg_data_by_side:
-                if (pname != 'DOWNBOND' and pnum in ('0', '-', 'NC')) or 'POWERCUT' in pname: pass
-                elif pname != 'DOWNBOND' and (not pkg_pn or pkg_pn == '-'): pass
+                if (pname not in ('DOWNBOND', 'NC') and pnum in ('0', '-', 'NC')) or 'POWERCUT' in pname: pass
+                elif pname not in ('DOWNBOND', 'NC') and (not pkg_pn or pkg_pn == '-'): pass
                 else:
                     if pnum not in seen_pnums:
                         pkg_data_by_side[p_loc].append(row)
@@ -1261,8 +1320,8 @@ class PDFGen:
             pname = row['DIE_PIN_NAME'].upper()
             pkg_pn = row.get('PKG_PIN_NAME', '-')
             # Same rules as Combined PDF PKG side
-            if (pname != 'DOWNBOND' and pnum in ('0', '-', 'NC')) or 'POWERCUT' in pname: continue
-            if pname != 'DOWNBOND' and (not pkg_pn or pkg_pn == '-'): continue
+            if (pname not in ('DOWNBOND', 'NC') and pnum in ('0', '-', 'NC')) or 'POWERCUT' in pname: continue
+            if pname not in ('DOWNBOND', 'NC') and (not pkg_pn or pkg_pn == '-'): continue
             if pnum not in pkg_data: pkg_data[pnum] = row.copy(); order.append(pnum)
         data_by_side = {'L': [], 'B': [], 'R': [], 'T': []}
         for pnum in order:

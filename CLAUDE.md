@@ -69,8 +69,8 @@ Field aliases are defined in `FIELD_ALIASES` (L70) — e.g. `PIN_NUM` → `PKG_N
 
 | Type | Condition | PKG PDF | APR PDF | Combined |
 |------|-----------|---------|---------|----------|
-| NC | `PIN_NAME=NC` | Black box | Skip | Skip |
-| DOWNBOND | `PIN_NAME=DOWNBOND` | Blue box | Skip | Skip + ground symbol |
+| NC | `PIN_NAME=NC` | Black box | Skip | Black box (PKG frame); APR skip |
+| DOWNBOND | `PIN_NAME=DOWNBOND` | Blue box | Skip | Blue box (PKG frame only) |
 | POWERCUT | `PIN_NAME=POWERCUT` | Skip | Black box | — |
 | Invalid PKG | `PKG_NUM='0'` or `'-'` | Skip | — | — |
 | Invalid APR | `DIE_NUM='0'` or `'-'` | — | Skip | Skip |
