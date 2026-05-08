@@ -8,14 +8,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Test all CSV examples (output to test_out/)
 make test_py
 
-# Run single file
+# Quick single-file test
+make run
+
+# Run single file manually
 python3 bin/ft_pad_assign.py -list examples/qfn48.8028.pin_list.csv -o output -all
 
 # Clean generated files
 make clean
 ```
 
-**Dependency:** `reportlab` (PDF generation). Install: `pip3 install reportlab`
+**Dependencies:** `reportlab` (PDF generation), `openpyxl` (Excel generation). Install: `pip3 install reportlab openpyxl`
 
 ## Development Workflow
 
@@ -26,7 +29,15 @@ make clean
 
 ## Architecture
 
-Single-file tool (`bin/ft_pad_assign.py`, ~1720 lines). Five classes with clear data flow:
+Three Python tools in `bin/`:
+
+| Tool | Purpose |
+|------|---------|
+| `ft_pad_assign.py` (~1720 lines) | Main tool: parse pin lists, generate PDFs and constraint files |
+| `gen_spec_pdf.py` | Generate CSV input specification PDF doc |
+| `gen_ug_excel.py` | Generate user guide Excel doc |
+
+Main tool data flow:
 
 ```
 Input File (.csv / .pin_list)
@@ -107,6 +118,9 @@ Three modes: standalone PKG, standalone APR, Combined (PKG + APR + wires).
 ### QFN Body Size Lookup (`QFN_BODY_SIZES`, L86)
 Maps pin count → body size in mm. Used when `PKG_SIZE` header is absent. 0.5mm pitch assumed; 0.4mm pitch auto-detected when die exceeds standard body.
 
+### QFN Physical Dimensions (`QFN_PHYSICAL_SPECS`, L100)
+Source: JEDEC MO-220 specs in `docs/`. Stores `(body_mm, pitch_mm, pin_width_typ_mm, pin_length_typ_mm, exposed_pad_mm)` per body size. Used for accurate pin pad drawing in PDFs.
+
 ## Output Files
 
 | Flag | Outputs |
@@ -127,6 +141,18 @@ Innovus/ICC2 constraint files only generated when `-v` (verilog) is provided.
 - `PKG_LOC` auto-filled when set to `"-"` — uses PACKAGE header counts
 - `DIE_LOC` follows `PKG_LOC` pattern only when ring is shifted (`PKG_TOP_LEFT_PIN != 1`)
 - All PDF text in the tool uses ReportLab's built-in Helvetica font
+
+## Makefile Targets
+
+| Target | Description |
+|--------|-------------|
+| `make test_py` | Test Python version against all examples in `examples/` |
+| `make run` | Quick single-file test (qfn40.8803 with verilog) |
+| `make build` | Compile C++ version |
+| `make test_cpp` | Compile and test C++ version |
+| `make test_pl` | Test Perl version |
+| `make test_all` | Test all three language versions |
+| `make clean` | Remove binaries and `test_out/` |
 
 ## Modification Changelog
 

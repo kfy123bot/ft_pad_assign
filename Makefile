@@ -28,7 +28,16 @@ test_py:
 	done
 	@echo "Python tests complete."
 run:
-	python3 $(PY_BIN) -list examples/qfn40.8803.0505_v3_pg.pin_list.csv  -v examples/va8803.vg -all -o test_out ; \
+	python3 $(PY_BIN) -list examples/qfn40.8803.0505_v3_pg.pin_list.csv  -v examples/va8803.vg -all -o test_out --die2 docs/JD1750_PSRAM.md --die2-loc="-500,-486" ; \
+
+# 2b. Test DIE2 Overlay (all examples + DIE2 on 8803 examples)
+test_die2:
+	@echo "--- Testing DIE2 Overlay ---"
+	@for list in $(EXAMPLES); do \
+		echo "=== $$list ===" ; \
+		python3 $(PY_BIN) -list $$list --die2 docs/JD1750_PSRAM.md --die2-loc="-500,-486" --die2-label="PSRAM_4MB" -all -o test_out ; \
+	done
+	@echo "DIE2 overlay tests complete."
 
 # 3. Test Perl Version
 test_pl:
@@ -70,9 +79,10 @@ help:
 	@echo "-------------------------"
 	@echo "make build     : Compile C++ version to $(CPP_BIN)"
 	@echo "make test_py   : Run tests using Python script"
+	@echo "make test_die2 : Run tests with DIE2 overlay (PSRAM)"
 	@echo "make test_pl   : Run tests using Perl script"
 	@echo "make test_cpp  : Compile and run tests using C++ binary"
 	@echo "make test_all  : Run tests for all 3 languages (Py/Pl/Cpp)"
 	@echo "make clean     : Remove all binaries and generated files"
 
-.PHONY: all build test_py test_pl test_cpp test_all clean help
+.PHONY: all build test_py test_die2 test_pl test_cpp test_all clean help

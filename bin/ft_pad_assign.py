@@ -22,13 +22,14 @@ except ImportError:
 
 import datetime
 
-VERSION = "v2.8"
+VERSION = "v2.9"
 
 # --- Logger Class ---
 class Logger:
     def __init__(self, log_fn=None):
         self.log_fn = log_fn
         self._fh = None
+        self._indent = 0  # nesting depth
         if self.log_fn:
             self._fh = open(self.log_fn, 'w')
             self._fh.write(f"--- FT_PAD_ASSIGN Execution Log ({datetime.datetime.now()}) ---\n")
@@ -42,10 +43,30 @@ class Logger:
         self._fh.write(f"--- FT_PAD_ASSIGN Execution Log ({datetime.datetime.now()}) ---\n")
         self._fh.flush()
 
+    def indent(self):
+        self._indent += 1
+
+    def dedent(self):
+        self._indent = max(0, self._indent - 1)
+
+    def _prefix(self):
+        if self._indent == 0:
+            return ""
+        return "│  " * self._indent
+
     def _write(self, out):
-        print(out)
+        line = self._prefix() + out
+        print(line)
         if self._fh:
-            self._fh.write(out + "\n")
+            self._fh.write(line + "\n")
+            self._fh.flush()
+
+    def section(self, msg):
+        """Print a section header (file reading). Clears indent first."""
+        line = f"├── {msg}"
+        print(line)
+        if self._fh:
+            self._fh.write(line + "\n")
             self._fh.flush()
 
     def info(self, msg):
@@ -108,6 +129,76 @@ QFN_PHYSICAL_SPECS = {
     88: (9.0, 0.5, 0.25, 0.50, 7.00),
 }
 
+# --- DIE2 Spec Parser ---
+def parse_die2_md(filepath, logger):
+    """Parse a DIE2 spec markdown file (e.g. JD1750_PSRAM.md).
+
+    Returns dict: {'die_size': (w, h) in um, 'pads': [{'num': str, 'name': str, 'x': float, 'y': float}, ...]}
+    Uses only the first section found (ignores subsequent ## headers).
+    """
+    result = {'die_size': None, 'pads': []}
+    logger.info(f"Reading: {filepath}")
+    try:
+        with open(filepath, 'r') as f:
+            lines = f.readlines()
+    except Exception as e:
+        logger.error(f"Cannot read DIE2 spec file: {filepath} ({e})")
+        return result
+
+    found_section = False
+    in_table = False
+    header_seen = False
+
+    for line in lines:
+        stripped = line.strip().replace('\\_', '_')
+        # Stop at next section header if we already found one
+        if stripped.startswith('## ') and found_section:
+            break
+        if stripped.startswith('## '):
+            found_section = True
+
+        # Parse DIE_SIZE (handle markdown escaped underscores: DIE\_SIZE)
+        if 'DIE_SIZE' in stripped and not result['die_size']:
+            m = re.search(r'(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)', stripped)
+            if m:
+                result['die_size'] = (float(m.group(1)), float(m.group(2)))
+                logger.info(f"DIE2 DIE_SIZE: {m.group(1)}x{m.group(2)} um")
+
+        # Parse table rows: | D2.N | PAD_NAME | X | Y |
+        if '|' not in stripped:
+            continue
+        cells = [c.strip() for c in stripped.split('|')]
+        # Remove empty leading/trailing from split
+        cells = [c for c in cells if c]
+
+        if len(cells) < 3:
+            continue
+
+        # Check for header row (PAD NO. / PAD Name / X Location / Y Location)
+        if 'PAD' in cells[0].upper() and 'NAME' in cells[1].upper():
+            header_seen = True
+            in_table = True
+            continue
+
+        # Skip separator rows (---)
+        if cells[0].startswith('---'):
+            continue
+
+        # Data rows: first cell should be D2.N
+        if in_table and re.match(r'D2\.\d+', cells[0]):
+            pad_num = cells[0]
+            pad_name = cells[1] if len(cells) > 1 else ''
+            try:
+                x = float(cells[2]) if len(cells) > 2 else 0.0
+                y = float(cells[3]) if len(cells) > 3 else 0.0
+            except ValueError:
+                logger.warn(f"DIE2: skip row with non-numeric coords: {stripped}")
+                continue
+            result['pads'].append({'num': pad_num, 'name': pad_name, 'x': x, 'y': y})
+
+    logger.info(f"DIE2 parsed: {len(result['pads'])} pads from {filepath}")
+    return result
+
 # --- Parser Class ---
 class Parser:
     def __init__(self, logger, list_file, v_files=None):
@@ -122,7 +213,7 @@ class Parser:
         self.v_raw_insts = {}
 
     def parse_list(self):
-        self.logger.info(f"Reading Pin List: {self.list_file}")
+        self.logger.section(f"Pin List: {self.list_file}")
         if not os.path.exists(self.list_file):
             self.logger.fatal(f"File not found: {self.list_file}")
 
@@ -683,7 +774,7 @@ class Parser:
             if not os.path.exists(v_file):
                 self.logger.warn(f"Verilog file not found: {v_file}")
                 continue
-            self.logger.info(f"Reading Verilog: {v_file}")
+            self.logger.section(f"Verilog: {v_file}")
             # ... rest of parse_verilog
             try:
                 with open(v_file, 'r') as f:
@@ -911,9 +1002,12 @@ class Parser:
 
 # --- PDF Generator Class ---
 class PDFGen:
-    def __init__(self, logger, parser):
+    def __init__(self, logger, parser, die2_info=None, die2_loc=None, die2_label="DIE2"):
         self.logger = logger
         self.parser = parser
+        self.die2_info = die2_info
+        self.die2_loc = die2_loc   # (x, y) tuple in um
+        self.die2_label = die2_label
 
     def _get_package_body_mm(self):
         # 1. PKG_SIZE header takes priority (unit: um, convert to mm for internal use)
@@ -1336,6 +1430,8 @@ class PDFGen:
             self.logger.info(f"  Ground/DB: key={coord_key}, count={count}")
 
         self._draw_center_info(c, cx, cy, min(edge_apr_x, edge_apr_y), l_cnt, b_cnt, r_cnt, t_cnt, apr_data_by_side)
+        if self.die2_info:
+            self._draw_die2_overlay(c, cx, cy, edge_apr_x, edge_apr_y, self.parser.die_size)
         self._draw_scale_bar(c, edge_pkg_x, edge_pkg_y, 'COMBINED', width)
         self._draw_timestamp(c)
         c.save()
@@ -1390,6 +1486,8 @@ class PDFGen:
             if side == 'T': limit = header_bottom
             side_len = self._side_length(side, edge_x, edge_y)
             self._draw_side_boxes(c, side, data_by_side[side], cx, cy, side_len, getattr(self, f"_{side}_pos")(cx, cy, edge_x, edge_y), max_cnt, 'APR', label_inside=False, max_label_extent=limit, allow_overflow=True, pin_inside=True, apr_pin_size=apr_pin_sz)
+        if self.die2_info:
+            self._draw_die2_overlay(c, cx, cy, edge_x, edge_y, self.parser.die_size)
         self._draw_scale_bar(c, edge_x, edge_y, 'APR', width)
         self._draw_timestamp(c)
         c.save()
@@ -1817,6 +1915,104 @@ class PDFGen:
         c.drawString(40, 30, ts)
         c.drawString(40, 21, f"ft_pad_assign : {VERSION}")
 
+    def _draw_die2_overlay(self, c, cx, cy, edge_apr_x, edge_apr_y, die1_size):
+        """Draw DIE2 frame and pads overlaid on the APR diagram.
+
+        Args:
+            c: ReportLab canvas
+            cx, cy: Center of DIE1 frame in PDF points
+            edge_apr_x, edge_apr_y: DIE1 frame dimensions in points
+            die1_size: DIE1 die_size tuple (w, h) in um, or None
+        """
+        if not self.die2_info or not self.die2_loc:
+            return
+        die2_size = self.die2_info.get('die_size')
+        pads = self.die2_info.get('pads', [])
+        if not die2_size:
+            self.logger.error("DIE2: missing DIE_SIZE in spec file.")
+            return
+
+        loc_x, loc_y = self.die2_loc
+        d2_w, d2_h = die2_size
+
+        # Compute scale: same as DIE1
+        if die1_size:
+            die1_x, die1_y = die1_size
+            scale = edge_apr_x / max(die1_x, die1_y)
+        else:
+            # Fallback: use DIE2's own size to fit within the APR frame
+            scale = edge_apr_x / max(d2_w, d2_h)
+
+        # DIE2 frame dimensions in points
+        d2_w_pts = d2_w * scale
+        d2_h_pts = d2_h * scale
+
+        # DIE2 center in frame coords (um -> points)
+        d2_cx = cx + (loc_x + d2_w / 2) * scale
+        d2_cy = cy + (loc_y + d2_h / 2) * scale
+
+        # Draw DIE2 frame (dashed, brown)
+        c.saveState()
+        c.setStrokeColor(colors.HexColor('#8B4513'))
+        c.setLineWidth(1.5)
+        c.setDash(6, 3)
+        c.rect(d2_cx - d2_w_pts / 2, d2_cy - d2_h_pts / 2, d2_w_pts, d2_h_pts)
+        c.restoreState()
+
+        # Draw DIE2 label at center
+        c.saveState()
+        c.setFont("Helvetica-Bold", 7)
+        c.setFillColor(colors.HexColor('#8B4513'))
+        c.drawCentredString(d2_cx, d2_cy + 4, f"{self.die2_label}")
+        c.setFont("Helvetica", 6)
+        c.drawCentredString(d2_cx, d2_cy - 5, f"{int(d2_w)}x{int(d2_h)} um")
+        c.restoreState()
+
+        # Draw DIE2 pads — compute pad size from min spacing to avoid overlap
+        pad_sz = 4  # fallback
+        if len(pads) >= 2:
+            # Find minimum distance between adjacent pads (sorted by same-side proximity)
+            min_dist = float('inf')
+            for i in range(len(pads)):
+                for j in range(i + 1, len(pads)):
+                    dx = abs(pads[i]['x'] - pads[j]['x'])
+                    dy = abs(pads[i]['y'] - pads[j]['y'])
+                    # Only compare pads on the same side (similar x or similar y)
+                    if dx < 20 or dy < 20:
+                        dist = (dx**2 + dy**2) ** 0.5
+                        if dist < min_dist:
+                            min_dist = dist
+            if min_dist < float('inf'):
+                # Pad box = 60% of min spacing in points (leave room for labels)
+                pad_sz = max(min_dist * scale * 0.6, 2)
+
+        for pad in pads:
+            px = d2_cx + pad['x'] * scale
+            py = d2_cy + pad['y'] * scale
+
+            # Determine color from pad name (same convention as DIE1)
+            name_upper = pad['name'].upper()
+            if any(kw in name_upper for kw in ('VDD', 'VCC', 'VDDQ')):
+                color = colors.red
+            elif any(kw in name_upper for kw in ('VSS', 'GND', 'VSSQ')):
+                color = colors.blue
+            else:
+                color = colors.HexColor('#8B4513')  # brown for signal
+
+            # Draw pad rectangle
+            c.saveState()
+            c.setStrokeColor(color)
+            c.setFillColor(color)
+            c.setLineWidth(0.5)
+            c.rect(px - pad_sz / 2, py - pad_sz / 2, pad_sz, pad_sz, fill=1, stroke=1)
+
+            # Draw pad label (font size scales with pad size)
+            font_sz = max(int(pad_sz * 1.2), 4)
+            c.setFont("Helvetica", font_sz)
+            c.setFillColor(colors.black)
+            c.drawString(px + pad_sz / 2 + 1, py - font_sz * 0.3, pad['name'])
+            c.restoreState()
+
 # --- Checker Class ---
 class Checker:
     def __init__(self, logger, parser):
@@ -2024,6 +2220,9 @@ def main():
     p.add_argument("-stagger-max", type=int, default=8, help="Max consecutive I/O pins before warning (default: 8)")
     p.add_argument("-all", action="store_true", help="All functions")
     p.add_argument("-o", "--outdir", default=".", help="Output folder (default: current directory)")
+    p.add_argument("--die2", help="DIE2 spec file (markdown)")
+    p.add_argument("--die2-loc", dest="die2_loc", help="DIE2 bottom-left x,y in um (relative to DIE1 center)")
+    p.add_argument("--die2-label", dest="die2_label", default="DIE2", help="DIE2 label in PDF (default: DIE2)")
     args = p.parse_args()
     if args.v is not None and len(args.v) == 0:
         args.v = None
@@ -2063,32 +2262,61 @@ def main():
 
     # 4. Now run the full parsing and check
     parser = Parser(logger, args.list, args.v)
+    logger.indent()
     parser.parse_list()
+    logger.dedent()
 
     if args.v:
+        logger.indent()
         parser.parse_verilog()
         parser.bridge_data()
+        logger.dedent()
     else:
         logger.warn("No Verilog files, skipping bridging.")
 
     prefix = os.path.join(out_dir, proj_no)
 
     if args.stagger:
+        logger.section("Stagger Density Check")
+        logger.indent()
         Checker(logger, parser).check_stagger(f"{prefix}_stagger.rpt", max_io=args.stagger_max)
-    
+        logger.dedent()
+
     if args.c:
+        logger.section("Constraint Files")
+        logger.indent()
         w = Writer(logger, parser)
         w.generate_completed_list(f"{prefix}.new")
         w.generate_completed_csv(f"{prefix}.new.csv")
         if args.v:
             w.generate_innovus_io(f"{prefix}_chip.inn.const")
             w.generate_icc2_io(f"{prefix}_chip.icc2.const")
+        logger.dedent()
+
+    # Parse DIE2 options
+    die2_info = None
+    die2_loc = None
+    if args.die2:
+        logger.section(f"DIE2 Overlay: {args.die2}")
+        logger.indent()
+        die2_info = parse_die2_md(args.die2, logger)
+        if args.die2_loc:
+            try:
+                parts = args.die2_loc.split(',')
+                die2_loc = (float(parts[0]), float(parts[1]))
+            except (ValueError, IndexError):
+                logger.error(f"Invalid -die2_loc format: '{args.die2_loc}'. Expected 'x,y'.")
+                die2_info = None
+        logger.dedent()
 
     if args.apr or args.pkg or args.combined:
-        pg = PDFGen(logger, parser)
+        logger.section("PDF Generation")
+        pg = PDFGen(logger, parser, die2_info=die2_info, die2_loc=die2_loc, die2_label=args.die2_label)
+        logger.indent()
         if args.apr: pg.generate_apr_pdf(f"{prefix}_apr.pdf")
         if args.pkg: pg.generate_pkg_pdf(f"{prefix}_pkg.pdf")
         if args.combined: pg.generate_combined_pdf(f"{prefix}_combined.pdf")
+        logger.dedent()
 
     logger.info("Execution successful.")
     logger.close()
