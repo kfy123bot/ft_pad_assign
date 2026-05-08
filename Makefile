@@ -27,6 +27,8 @@ test_py:
 		python3 $(PY_BIN) -list $$list -v $(V_FILES) -all -o test_out ; \
 	done
 	@echo "Python tests complete."
+run:
+	python3 $(PY_BIN) -list examples/qfn40.8803.0505_v3_pg.pin_list.csv  -v examples/va8803.vg -all -o test_out ; \
 
 # 3. Test Perl Version
 test_pl:

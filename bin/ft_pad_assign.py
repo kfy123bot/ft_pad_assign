@@ -22,7 +22,7 @@ except ImportError:
 
 import datetime
 
-VERSION = "v2.6"
+VERSION = "v2.8"
 
 # --- Logger Class ---
 class Logger:
@@ -139,6 +139,8 @@ class Parser:
             self._reassign_pkg_loc()
             self._reassign_die_loc()
             self._sanity_check_list()
+            for row in self.data:
+                row['_orig_die_num'] = row['DIE_NUM']
             self._reorder_and_reindex_apr_data()
             self._parse_die_size()
             self._extract_cell_from_pin_name()
@@ -686,12 +688,10 @@ class Parser:
             try:
                 with open(v_file, 'r') as f:
                     content = f.read()
-                # Ports
-                pm = re.finditer(r'(input|output|inout)\s+(?:\[.*?\]\s+)?(.*?);', content, re.S)
+                # Ports — match one port per occurrence to avoid multi-line capture
+                pm = re.finditer(r'\b(input|output|inout)\s+(?:\[.*?\]\s+)?(\w+)', content)
                 for m in pm:
-                    direction = m.group(1)[0].upper()
-                    for p in [x.strip() for x in m.group(2).split(',')]:
-                        self.v_ports[p] = direction
+                    self.v_ports[m.group(2)] = m.group(1)[0].upper()
                 # Instances
                 _VERILOG_KEYWORDS = {'module', 'function', 'task', 'input', 'output', 'inout', 'reg', 'wire', 'parameter'}
                 im = re.finditer(r'(\w+)\s+(\w+)\s*\((.*?)\);', content, re.S)
@@ -700,13 +700,21 @@ class Parser:
                     if cell.lower() in _VERILOG_KEYWORDS:
                         continue
                     self.v_raw_insts[inst] = cell
-                    pad_m = re.search(r'\.PAD\s*\(\s*(.*?)\s*\)', body, re.S)
-                    if pad_m:
-                        net = pad_m.group(1).strip()
-                        self.v_insts[net] = cell
-                        self.v_net_to_inst[net] = inst
+                    # Build net→instance from ALL .port(net) connections (not just .PAD)
+                    for conn_m in re.finditer(r'\.\w+\s*\(\s*(\w+)\s*\)', body):
+                        net = conn_m.group(1)
+                        if net not in self.v_net_to_inst:
+                            self.v_net_to_inst[net] = inst
+                            self.v_insts[net] = cell
             except Exception as e:
                 self.logger.warn(f"Error parsing Verilog {v_file}: {e}")
+        if self.v_ports or self.v_raw_insts:
+            net_conn = len(self.v_net_to_inst)
+            self.logger.info(
+                f"Verilog parsed: {len(self.v_ports)} ports, "
+                f"{len(self.v_raw_insts)} instances"
+                + (f", {net_conn} net-to-instance connections" if net_conn else " (no instance connections — using U_<signal> naming convention)")
+            )
 
     def bridge_data(self):
         self.logger.info("Bridging data and re-indexing DIE_NUM with Dynamic Reference Update...")
@@ -770,29 +778,110 @@ class Parser:
                 self.logger.info(f"Updated Dynamic Reference (Bridge): {orig_pnum} -> {new_pnum}")
 
         # --- Bridging Logic ---
+        _skip_names = {'NC', 'DOWNBOND', 'POWERCUT', '-', ''}
+        matched_signals = set()    # port_sn resolved to a real instance
+        fallback_signals = set()   # port_sn with no matching instance
+        no_port_signals = set()    # port_sn not found in verilog module ports
+        no_inst_cells = set()      # (port_sn, zz) where zz not found in verilog instances
+
         for row in self.data:
             pname = row['DIE_PIN_NAME']
             pname_upper = pname.upper()
-            if pname_upper == 'NC': continue
-            
-            # Use sn for lookup, handle power/group segments
-            sn = pname
-            if '%' in pname:
-                sn = pname.split('%')[-1]
-                if not sn: sn = pname
-            
-            p_mode = (row['DIRECTION'] in ('P', 'G') or '%' in pname or 'POWERCUT' in pname_upper)
-            
+            if pname_upper in _skip_names or row['PKG_NUM'].upper() == 'INNER_BOND':
+                continue
+
+            has_pct = '%' in pname
+            # sn  : last segment after % — used as cell-path / net for instance lookup
+            sn = pname.split('%')[-1] if has_pct else pname
+            if not sn: sn = pname
+            # port_sn: first segment before % — corresponds to verilog module port name
+            port_sn = pname.split('%')[0] if has_pct else pname
+
+            p_mode = (row['DIRECTION'] in ('P', 'G') or has_pct or 'POWERCUT' in pname_upper)
+
             # Attempt to update IO_CELL_NAME if not already set or is a placeholder
             if row['IO_CELL_NAME'] in ('-', '', 'NOT_FOUND'):
+                # Resolve instance: primary = .PAD(net) trace; fallback = U_{port} convention
+                inst = self.v_net_to_inst.get(sn)
+                if inst is None:
+                    fallback = f"U_{sn}"
+                    inst = fallback if fallback in self.v_raw_insts else None
+
                 if p_mode:
-                    row['IO_CELL_NAME'] = self.v_raw_insts.get(sn, self.v_insts.get(sn, 'NOT_FOUND'))
-                    row['INST_NAME'] = sn
+                    cell = self.v_raw_insts.get(sn, self.v_insts.get(sn, 'NOT_FOUND'))
+                    row['IO_CELL_NAME'] = cell
+                    row['INST_NAME'] = inst if inst else sn
                 else:
-                    row['IO_CELL_NAME'] = self.v_insts.get(sn, self.v_raw_insts.get(sn, 'NOT_FOUND'))
-                    row['INST_NAME'] = self.v_net_to_inst.get(sn, sn)
+                    cell = self.v_insts.get(sn)
+                    if cell is None and inst:
+                        cell = self.v_raw_insts.get(inst, 'NOT_FOUND')
+                    row['IO_CELL_NAME'] = cell if cell else 'NOT_FOUND'
+                    row['INST_NAME'] = inst if inst else sn
                     if row['DIRECTION'] in ('-', 'UNKNOWN', ''):
-                        row['DIRECTION'] = self.v_ports.get(sn, 'UNKNOWN')
+                        row['DIRECTION'] = self.v_ports.get(port_sn, 'UNKNOWN')
+
+                # Instance resolution tracking (all pin types)
+                port_in_verilog = (not self.v_ports) or (port_sn in self.v_ports)
+                if inst:
+                    matched_signals.add(port_sn)
+                elif port_in_verilog:
+                    # Check 1 passed (port exists), check 2 failed (no instance trace)
+                    fallback_signals.add(port_sn)
+                # If port not in verilog, skip check 2 — will be caught by no_port_signals
+
+            # --- Sanity checks (run regardless of IO_CELL_NAME state) ---
+            if self.v_ports or self.v_raw_insts:
+                # 1. port_sn must exist in verilog module ports (only for plain pins, not xx%yy%zz)
+                if not has_pct and self.v_ports and port_sn not in self.v_ports:
+                    no_port_signals.add((port_sn, row.get('_orig_die_num', row['DIE_NUM'])))
+
+                # 2. For %C%/%IO% pins: top-level of zz must exist in verilog instances
+                if has_pct and self.v_raw_insts:
+                    top_inst = sn.split('/')[0]  # e.g. "U_AIP_TOP/U_X" → "U_AIP_TOP"
+                    if top_inst not in self.v_raw_insts:
+                        no_inst_cells.add((port_sn, sn, row.get('_orig_die_num', row['DIE_NUM'])))
+
+        # --- Verilog Sanity Report ---
+        if self.v_ports or self.v_raw_insts:
+            total = len(matched_signals) + len(fallback_signals)
+            self.logger.info(
+                f"Verilog bridge: {len(matched_signals)}/{total} pins resolved to instances"
+                + (f", {len(fallback_signals)} with no matching instance" if fallback_signals else "")
+            )
+            for sig in sorted(fallback_signals):
+                die = next((r.get('_orig_die_num', r['DIE_NUM']) for r in self.data
+                            if r['DIE_PIN_NAME'].split('%')[0] == sig or r['DIE_PIN_NAME'] == sig), '?')
+                self.logger.warn(f"  No instance for '{sig}' (DIE_NUM={die})")
+
+            if no_port_signals:
+                self.logger.warn(
+                    f"Verilog port mismatch: {len(no_port_signals)} DIE_PIN_NAME(s) "
+                    f"not found in verilog module ports:"
+                )
+                for sig, die in sorted(no_port_signals):
+                    self.logger.warn(f"  '{sig}' not in verilog ports (DIE_NUM={die})")
+
+            if no_inst_cells:
+                self.logger.warn(
+                    f"Verilog instance mismatch: {len(no_inst_cells)} %C%/%IO% cell path(s) "
+                    f"not found in verilog instances:"
+                )
+                for sig, zz, die in sorted(no_inst_cells):
+                    self.logger.warn(
+                        f"  '{sig}%...%{zz}' top-inst '{zz.split('/')[0]}' not in verilog (DIE_NUM={die})"
+                    )
+
+            # Verilog ports not referenced by any DIE_PIN_NAME in the pin list
+            pinlist_port_sn = {
+                (r['DIE_PIN_NAME'].split('%')[0] if '%' in r['DIE_PIN_NAME'] else r['DIE_PIN_NAME'])
+                for r in self.data if r['DIE_PIN_NAME'].upper() not in _skip_names
+            }
+            unused_ports = sorted(set(self.v_ports) - pinlist_port_sn)
+            if unused_ports:
+                self.logger.warn(
+                    f"Verilog ports not referenced in pin list ({len(unused_ports)}): "
+                    + ', '.join(unused_ports)
+                )
 
     def _parse_die_size(self):
         raw = self.header.get('DIE_SIZE')
@@ -1866,10 +1955,14 @@ class Writer:
                 key=lambda x: int(x['DIE_NUM']))
             
             sides = {'L': [], 'B': [], 'R': [], 'T': []}
+            seen_insts = set()
             for row in sorted_data:
+                inst = row['INST_NAME']
+                if inst in seen_insts: continue
+                seen_insts.add(inst)
                 loc = row['DIE_LOC'].upper()
-                if loc in sides: sides[loc].append(row['INST_NAME'])
-            
+                if loc in sides: sides[loc].append(inst)
+
             with open(filename, 'w') as f:
                 f.write("( globals\n    version = 3\n    io_order = default\n)\n")
                 f.write("( iopad\n")
@@ -1898,10 +1991,14 @@ class Writer:
                 key=lambda x: int(x['DIE_NUM']))
             
             sides = {'L': [], 'B': [], 'R': [], 'T': []}
+            seen_insts = set()
             for row in sorted_data:
+                inst = row['INST_NAME']
+                if inst in seen_insts: continue
+                seen_insts.add(inst)
                 loc = row['DIE_LOC'].upper()
-                if loc in sides: sides[loc].append(row['INST_NAME'])
-                
+                if loc in sides: sides[loc].append(inst)
+
             with open(filename, 'w') as f:
                 f.write("# ICC2 IO Assignment File (Tcl commands)\n\n")
                 s_map = {'L': 'left', 'B': 'bottom', 'R': 'right', 'T': 'top'}
