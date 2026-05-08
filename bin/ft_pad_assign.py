@@ -22,6 +22,8 @@ except ImportError:
 
 import datetime
 
+VERSION = "v2.6"
+
 # --- Logger Class ---
 class Logger:
     def __init__(self, log_fn=None):
@@ -1719,11 +1721,12 @@ class PDFGen:
             c.drawRightString(rx, info_y, f"Die: {int(die_size[0])}x{int(die_size[1])} um")
 
     def _draw_timestamp(self, c):
-        """Draw generation timestamp at bottom-left corner."""
+        """Draw generation timestamp and tool version at bottom-left corner."""
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         c.setFont("Helvetica", 7)
         c.setFillColor(colors.black)
         c.drawString(40, 30, ts)
+        c.drawString(40, 21, f"ft_pad_assign : {VERSION}")
 
 # --- Checker Class ---
 class Checker:
@@ -1854,8 +1857,13 @@ class Writer:
         self.logger.info(f"Generating Innovus IO Constraint: {filename}")
         try:
             # Sort data by DIE_PAD_NUM for correct ring sequence in constraints
-            sorted_data = sorted([r for r in self.parser.data if r['DIE_PIN_NAME'].upper() != 'NC' and r['DIE_NUM'] != '0'], 
-                                 key=lambda x: int(x['DIE_NUM']))
+            sorted_data = sorted(
+                [r for r in self.parser.data
+                 if r['DIE_PIN_NAME'].upper() not in ('NC', 'DOWNBOND')
+                 and r['DIE_NUM'] not in ('0', '-', '')
+                 and r['PKG_NUM'].upper() != 'INNER_BOND'
+                 and r.get('INST_NAME', '-') not in ('-', '')],
+                key=lambda x: int(x['DIE_NUM']))
             
             sides = {'L': [], 'B': [], 'R': [], 'T': []}
             for row in sorted_data:
@@ -1881,8 +1889,13 @@ class Writer:
         self.logger.info(f"Generating ICC2 IO Constraint: {filename}")
         try:
             # Sort data by DIE_PAD_NUM for correct ring sequence
-            sorted_data = sorted([r for r in self.parser.data if r['DIE_PIN_NAME'].upper() != 'NC' and r['DIE_NUM'] != '0'], 
-                                 key=lambda x: int(x['DIE_NUM']))
+            sorted_data = sorted(
+                [r for r in self.parser.data
+                 if r['DIE_PIN_NAME'].upper() not in ('NC', 'DOWNBOND')
+                 and r['DIE_NUM'] not in ('0', '-', '')
+                 and r['PKG_NUM'].upper() != 'INNER_BOND'
+                 and r.get('INST_NAME', '-') not in ('-', '')],
+                key=lambda x: int(x['DIE_NUM']))
             
             sides = {'L': [], 'B': [], 'R': [], 'T': []}
             for row in sorted_data:
