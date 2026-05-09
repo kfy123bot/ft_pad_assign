@@ -28,14 +28,23 @@ test_py:
 	done
 	@echo "Python tests complete."
 run:
-	python3 $(PY_BIN) -list examples/qfn40.8803.0505_v3_pg.pin_list.csv  -v examples/va8803.vg -all -o test_out --die2 docs/JD1750_PSRAM.md --die2-loc="-500,-486" ; \
+	python3 $(PY_BIN) -list examples/qfn40.8803.0505_v3_pg.pin_list.csv  -v examples/va8803.vg -all -o test_out --die2 examples/JD1750_PSRAM.csv --die2-flip-x ; \
 
 # 2b. Test DIE2 Overlay (all examples + DIE2 on 8803 examples)
 test_die2:
 	@echo "--- Testing DIE2 Overlay ---"
 	@for list in $(EXAMPLES); do \
+		case "$$list" in *JD1750_PSRAM*) continue ;; esac ; \
 		echo "=== $$list ===" ; \
-		python3 $(PY_BIN) -list $$list --die2 docs/JD1750_PSRAM.md --die2-loc="-500,-486" --die2-label="PSRAM_4MB" -all -o test_out ; \
+		python3 $(PY_BIN) -list $$list --die2 examples/JD1750_PSRAM.csv -all -o test_out ; \
+	done
+	@echo "DIE2 overlay tests complete."
+test_die2_flip_x:
+	@echo "--- Testing DIE2 Overlay ---"
+	@for list in $(EXAMPLES); do \
+		case "$$list" in *JD1750_PSRAM*) continue ;; esac ; \
+		echo "=== $$list ===" ; \
+		python3 $(PY_BIN) -list $$list --die2 examples/JD1750_PSRAM.csv --die2-flip-x -all -o test_out ; \
 	done
 	@echo "DIE2 overlay tests complete."
 

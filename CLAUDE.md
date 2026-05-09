@@ -121,6 +121,47 @@ Maps pin count → body size in mm. Used when `PKG_SIZE` header is absent. 0.5mm
 ### QFN Physical Dimensions (`QFN_PHYSICAL_SPECS`, L100)
 Source: JEDEC MO-220 specs in `docs/`. Stores `(body_mm, pitch_mm, pin_width_typ_mm, pin_length_typ_mm, exposed_pad_mm)` per body size. Used for accurate pin pad drawing in PDFs.
 
+## DIE2 Overlay
+
+Overlay a second die (e.g. PSRAM) on APR and Combined PDFs.
+
+### CLI Usage
+
+```bash
+# CSV format (recommended) — all info in one file
+python3 bin/ft_pad_assign.py -list input.csv --die2 docs/JD1750_PSRAM.csv -apr -combined -o out
+
+# With X-flip (mirror B/T sides)
+python3 bin/ft_pad_assign.py -list input.csv --die2 docs/JD1750_PSRAM.csv --die2-flip-x -apr -combined -o out
+
+# Markdown format (legacy) — requires separate --die2-loc
+python3 bin/ft_pad_assign.py -list input.csv --die2 docs/JD1750_PSRAM.md --die2-loc="750,514" -apr -combined -o out
+```
+
+### DIE2 CSV Format (`docs/JD1750_PSRAM.csv`)
+
+Header + data table, same style as pin_list.csv:
+
+```csv
+DIE2_NAME : PSRAM_4MB
+DIE_SIZE : 1000x972
+DIE2_LOC : 750,514
+
+D2_NUM,D2_PAD_NAME,X,Y,D1_PAD,TYPE
+D2.1,VSSQ,450.074,424.188,VSS_IOB,power
+D2.2,DQS,450.074,359.188,PIO_24,signal
+D2.15,NC,-453,411.414,,
+...
+```
+
+- `DIE2_NAME`: display name in PDF (optional, default "DIE2")
+- `DIE_SIZE`: die dimensions in um, WxH (required)
+- `DIE2_LOC`: DIE2 bottom-left relative to DIE1 bottom-left (0,0) in um (required)
+- Pad X,Y: relative to DIE2 center in um
+- `D1_PAD`: connected DIE1 pad name (optional, empty = no connection)
+- `TYPE`: connection type `signal`/`power` (optional, empty = no connection)
+- `--die2-flip-x`: flip DIE2 along X-axis (mirror B/T sides), negates pad Y coords and shifts frame
+
 ## Output Files
 
 | Flag | Outputs |
@@ -147,6 +188,7 @@ Innovus/ICC2 constraint files only generated when `-v` (verilog) is provided.
 | Target | Description |
 |--------|-------------|
 | `make test_py` | Test Python version against all examples in `examples/` |
+| `make test_die2` | Test DIE2 overlay on all examples |
 | `make run` | Quick single-file test (qfn40.8803 with verilog) |
 | `make build` | Compile C++ version |
 | `make test_cpp` | Compile and test C++ version |

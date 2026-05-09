@@ -22,7 +22,7 @@ except ImportError:
 
 import datetime
 
-VERSION = "v2.9"
+VERSION = "v3.0"
 
 # --- Logger Class ---
 class Logger:
@@ -198,6 +198,86 @@ def parse_die2_md(filepath, logger):
 
     logger.info(f"DIE2 parsed: {len(result['pads'])} pads from {filepath}")
     return result
+
+
+def parse_die2_csv(filepath, logger):
+    """Parse DIE2 spec CSV file.
+    Returns dict: {
+        'name': str,          # DIE2_NAME
+        'die_size': (w, h),   # um
+        'loc': (x, y),        # um, relative to DIE1 bottom-left (0,0)
+        'pads': [{'num': str, 'name': str, 'x': float, 'y': float,
+                   'd1_pad': str, 'type': str}, ...]
+    }
+    """
+    result = {'name': 'DIE2', 'die_size': None, 'loc': None, 'loc_relative': 'bottom_left', 'pads': []}
+    logger.info(f"Reading: {filepath}")
+    try:
+        with open(filepath, 'r') as f:
+            lines = f.readlines()
+    except Exception as e:
+        logger.error(f"Cannot read DIE2 CSV file: {filepath} ({e}")
+        return result
+
+    # Phase 1: parse KEY : VALUE headers
+    data_start = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or all(c in ', ' for c in stripped):
+            data_start = i + 1
+            continue
+        if ':' in stripped:
+            key, _, val = stripped.partition(':')
+            key = key.strip().upper()
+            val = val.strip().rstrip(',').strip()
+            if key == 'DIE2_NAME':
+                result['name'] = val
+                logger.info(f"  DIE2_NAME: {val}")
+            elif key == 'DIE_SIZE':
+                m = re.match(r'(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)', val)
+                if m:
+                    result['die_size'] = (float(m.group(1)), float(m.group(2)))
+                    logger.info(f"  DIE_SIZE: {m.group(1)}x{m.group(2)} um")
+            elif key == 'DIE2_LOC':
+                parts = val.split(',')
+                if len(parts) == 2:
+                    try:
+                        result['loc'] = (float(parts[0]), float(parts[1]))
+                        logger.info(f"  DIE2_LOC: ({parts[0]}, {parts[1]}) um (relative to DIE1 bottom-left)")
+                    except ValueError:
+                        logger.error(f"Invalid DIE2_LOC value: '{val}'")
+        else:
+            # First non-header, non-blank line → data table starts
+            data_start = i
+            break
+
+    # Phase 2: parse data table (skip header row)
+    for line in lines[data_start:]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        cells = [c.strip() for c in stripped.split(',')]
+        if len(cells) < 4:
+            continue
+        # Skip header row
+        if cells[0].upper() in ('D2_NUM', 'PAD NO.', 'PAD_NUM'):
+            continue
+        pad_num = cells[0]
+        pad_name = cells[1]
+        try:
+            x = float(cells[2])
+            y = float(cells[3])
+        except ValueError:
+            continue
+        d1_pad = cells[4].strip() if len(cells) > 4 and cells[4].strip() else ''
+        conn_type = cells[5].strip() if len(cells) > 5 and cells[5].strip() else ''
+        result['pads'].append({'num': pad_num, 'name': pad_name, 'x': x, 'y': y,
+                               'd1_pad': d1_pad, 'type': conn_type})
+
+    n_conn = sum(1 for p in result['pads'] if p.get('d1_pad'))
+    logger.info(f"  Parsed: {len(result['pads'])} pads ({n_conn} connections)")
+    return result
+
 
 # --- Parser Class ---
 class Parser:
@@ -1192,7 +1272,6 @@ class PDFGen:
         edge_apr_x, edge_apr_y, edge_pkg_x, edge_pkg_y = self._compute_frame_dimensions(200, 350)
         c.setLineWidth(2)
         c.rect(cx - edge_pkg_x/2, cy - edge_pkg_y/2, edge_pkg_x, edge_pkg_y)
-        self._draw_corner_indicators(c, cx, cy, edge_pkg_x, edge_pkg_y)
         pin_dims_pkg = self._get_pin_drawing_dims(edge_pkg_x, edge_pkg_y, 'PKG')
         if pin_dims_pkg.get('center_pad'):
             self._draw_center_pad(c, cx, cy, pin_dims_pkg['center_pad'])
@@ -1429,9 +1508,8 @@ class PDFGen:
 
             self.logger.info(f"  Ground/DB: key={coord_key}, count={count}")
 
-        self._draw_center_info(c, cx, cy, min(edge_apr_x, edge_apr_y), l_cnt, b_cnt, r_cnt, t_cnt, apr_data_by_side)
         if self.die2_info:
-            self._draw_die2_overlay(c, cx, cy, edge_apr_x, edge_apr_y, self.parser.die_size)
+            self._draw_die2_overlay(c, cx, cy, edge_apr_x, edge_apr_y, self.parser.die_size, apr_coords)
         self._draw_scale_bar(c, edge_pkg_x, edge_pkg_y, 'COMBINED', width)
         self._draw_timestamp(c)
         c.save()
@@ -1481,13 +1559,13 @@ class PDFGen:
             apr_pin_sz = 100.0 * edge_x / max(die_size[0], die_size[1])
         else:
             apr_pin_sz = 6
+        apr_coords_apr = {}
         for side in ('L', 'B', 'R', 'T'):
             limit = apr_edge[side]
             if side == 'T': limit = header_bottom
             side_len = self._side_length(side, edge_x, edge_y)
-            self._draw_side_boxes(c, side, data_by_side[side], cx, cy, side_len, getattr(self, f"_{side}_pos")(cx, cy, edge_x, edge_y), max_cnt, 'APR', label_inside=False, max_label_extent=limit, allow_overflow=True, pin_inside=True, apr_pin_size=apr_pin_sz)
-        if self.die2_info:
-            self._draw_die2_overlay(c, cx, cy, edge_x, edge_y, self.parser.die_size)
+            a_coords = self._draw_side_boxes(c, side, data_by_side[side], cx, cy, side_len, getattr(self, f"_{side}_pos")(cx, cy, edge_x, edge_y), max_cnt, 'APR', label_inside=False, max_label_extent=limit, allow_overflow=True, pin_inside=True, apr_pin_size=apr_pin_sz)
+            apr_coords_apr.update(a_coords)
         self._draw_scale_bar(c, edge_x, edge_y, 'APR', width)
         self._draw_timestamp(c)
         c.save()
@@ -1499,7 +1577,6 @@ class PDFGen:
         cx, cy = width/2, 255; self._draw_header(c, "PACKAGE PIN DIAGRAM", width, height)
         _, _, edge_x, edge_y = self._compute_frame_dimensions(280, 280)
         c.setLineWidth(2); c.rect(cx - edge_x/2, cy - edge_y/2, edge_x, edge_y)
-        self._draw_corner_indicators(c, cx, cy, edge_x, edge_y)
         pin_dims = self._get_pin_drawing_dims(edge_x, edge_y, 'PKG')
         if pin_dims.get('center_pad'):
             self._draw_center_pad(c, cx, cy, pin_dims['center_pad'])
@@ -1670,11 +1747,17 @@ class PDFGen:
                 is_combined_inner_apr = (mode == 'APR' and label_inside)
                 if draw_dot and not is_combined_inner_apr and not skip_start_dot:
                     dot_r = 6
-                    dot_x, dot_y = px + bw/2, py + bh/2
-                    if side == 'L': dot_x += bw + 12
-                    elif side == 'R': dot_x -= 12
-                    elif side == 'T': dot_y -= 12
-                    elif side == 'B': dot_y += bh + 12
+                    # Place at intersection of L-side pin center X and T-side pin center Y
+                    # Compute frame edges from b_pos and length
+                    L_edge = b_pos[0]  # L-side X
+                    T_edge = cy + length / 2  # T-side Y (length = edge_y for L side)
+                    # Pin center offset: half pin dimension inward from frame edge
+                    if pin_inside:
+                        dot_x = L_edge + bw / 2
+                        dot_y = T_edge - bh
+                    else:
+                        dot_x = L_edge
+                        dot_y = T_edge
                     c.setFillColor(colors.black)
                     c.circle(dot_x, dot_y, dot_r, stroke=0, fill=1)
 
@@ -1804,11 +1887,15 @@ class PDFGen:
         f_max = max(l, b, r, t)
         for s in ('L', 'B', 'R', 'T'): f_max = max(f_max, len(data.get(s, [])))
         step = edge / (f_max + 1); font_size = max(2, min(step * 0.9, 7)); spacing = font_size * 1.5
-        c.setFont("Helvetica", font_size); c.setFillColor(colors.black)
+        c.saveState()
+        c.setFont("Helvetica", font_size)
+        c.setFillColor(colors.black)
+        c.setFillAlpha(1.0)
         h = self.parser.header
         c.drawCentredString(cx, cy + spacing, f"Project: {h.get('PRODUCTION NO.', h.get('PRODUCTION NO', 'N/A'))}")
         c.drawCentredString(cx, cy, f"Package: {h.get('PACKAGE', 'N/A')}")
         c.drawCentredString(cx, cy - spacing, f"Version: {h.get('VERSION', 'N/A')}")
+        c.restoreState()
 
     def _draw_center_pad(self, c, cx, cy, pad_size_pts, label="GND"):
         """Draw a dashed rectangle for the center exposed/thermal pad."""
@@ -1915,7 +2002,7 @@ class PDFGen:
         c.drawString(40, 30, ts)
         c.drawString(40, 21, f"ft_pad_assign : {VERSION}")
 
-    def _draw_die2_overlay(self, c, cx, cy, edge_apr_x, edge_apr_y, die1_size):
+    def _draw_die2_overlay(self, c, cx, cy, edge_apr_x, edge_apr_y, die1_size, apr_coords=None):
         """Draw DIE2 frame and pads overlaid on the APR diagram.
 
         Args:
@@ -1923,6 +2010,7 @@ class PDFGen:
             cx, cy: Center of DIE1 frame in PDF points
             edge_apr_x, edge_apr_y: DIE1 frame dimensions in points
             die1_size: DIE1 die_size tuple (w, h) in um, or None
+            apr_coords: dict of DIE1 APR pad positions keyed by DIE_NUM (for connection wires)
         """
         if not self.die2_info or not self.die2_loc:
             return
@@ -1943,27 +2031,36 @@ class PDFGen:
             # Fallback: use DIE2's own size to fit within the APR frame
             scale = edge_apr_x / max(d2_w, d2_h)
 
+        # Convert DIE2_LOC to DIE1-center-relative coords
+        # CSV: loc is relative to DIE1 bottom-left (0,0) → subtract half of DIE1
+        # MD:  loc is already relative to DIE1 center → no conversion
+        if self.die2_info.get('loc_relative') == 'bottom_left' and die1_size:
+            loc_x = loc_x - die1_size[0] / 2
+            loc_y = loc_y - die1_size[1] / 2
+
         # DIE2 frame dimensions in points
         d2_w_pts = d2_w * scale
         d2_h_pts = d2_h * scale
 
         # DIE2 center in frame coords (um -> points)
+        # Frame bottom-left stays at DIE2_LOC regardless of flip
+        flip_x = self.die2_info.get('flip_x', False)
         d2_cx = cx + (loc_x + d2_w / 2) * scale
         d2_cy = cy + (loc_y + d2_h / 2) * scale
 
-        # Draw DIE2 frame (dashed, brown)
+        # Draw DIE2 frame (solid, brown, 30% transparent)
         c.saveState()
         c.setStrokeColor(colors.HexColor('#8B4513'))
+        c.setStrokeAlpha(0.3)
         c.setLineWidth(1.5)
-        c.setDash(6, 3)
-        c.rect(d2_cx - d2_w_pts / 2, d2_cy - d2_h_pts / 2, d2_w_pts, d2_h_pts)
+        c.rect(d2_cx - d2_w_pts / 2, d2_cy - d2_h_pts / 2, d2_w_pts, d2_h_pts, fill=0, stroke=1)
         c.restoreState()
 
         # Draw DIE2 label at center
         c.saveState()
         c.setFont("Helvetica-Bold", 7)
         c.setFillColor(colors.HexColor('#8B4513'))
-        c.drawCentredString(d2_cx, d2_cy + 4, f"{self.die2_label}")
+        c.drawCentredString(d2_cx, d2_cy + 4, f"{self.die2_info.get('name', self.die2_label)}")
         c.setFont("Helvetica", 6)
         c.drawCentredString(d2_cx, d2_cy - 5, f"{int(d2_w)}x{int(d2_h)} um")
         c.restoreState()
@@ -1986,9 +2083,22 @@ class PDFGen:
                 # Pad box = 60% of min spacing in points (leave room for labels)
                 pad_sz = max(min_dist * scale * 0.6, 2)
 
+        font_sz = max(int(pad_sz * 1.2), 4)
+
+        # Draw DIE2 location at bottom-left corner outside frame
+        c.saveState()
+        c.setFont("Helvetica", font_sz)
+        c.setFillColor(colors.black)
+        c.setFillAlpha(0.5)
+        orig_loc = self.die2_info.get('loc', (0, 0))
+        bl_x = d2_cx - d2_w_pts / 2
+        bl_y = d2_cy - d2_h_pts / 2
+        c.drawString(bl_x, bl_y - font_sz * 1.5, f"({orig_loc[0]:.0f},{orig_loc[1]:.0f})")
+        c.restoreState()
+
         for pad in pads:
             px = d2_cx + pad['x'] * scale
-            py = d2_cy + pad['y'] * scale
+            py = d2_cy + (-pad['y'] if flip_x else pad['y']) * scale
 
             # Determine color from pad name (same convention as DIE1)
             name_upper = pad['name'].upper()
@@ -2007,11 +2117,80 @@ class PDFGen:
             c.rect(px - pad_sz / 2, py - pad_sz / 2, pad_sz, pad_sz, fill=1, stroke=1)
 
             # Draw pad label (font size scales with pad size)
-            font_sz = max(int(pad_sz * 1.2), 4)
             c.setFont("Helvetica", font_sz)
             c.setFillColor(colors.black)
-            c.drawString(px + pad_sz / 2 + 1, py - font_sz * 0.3, pad['name'])
+            c.setFillAlpha(0.5)
+            # Show pad name + actual coordinates (flipped Y if applicable)
+            actual_y = -pad['y'] if flip_x else pad['y']
+            label = f"{pad['name']} ({pad['x']:.0f},{actual_y:.0f})"
+            c.drawString(px + pad_sz / 2 + 1, py - font_sz * 0.3, label)
             c.restoreState()
+
+        # Draw DIE1-DIE2 connection wires
+        if apr_coords:
+            # Build lookup: DIE_PIN_NAME -> DIE_NUM (first match, skip NC/DOWNBOND)
+            d1_name_to_num = {}
+            for row in self.parser.data:
+                pname = row['DIE_PIN_NAME'].upper()
+                if pname in ('NC', 'DOWNBOND') or row['DIE_NUM'] in ('0', '-'):
+                    continue
+                if pname not in d1_name_to_num:
+                    d1_name_to_num[pname] = row['DIE_NUM']
+
+            n_wires = 0
+            for pad in pads:
+                d1_pad_name = pad.get('d1_pad', '').strip()
+                if not d1_pad_name:
+                    continue
+                conn_type = pad.get('type', 'signal').strip().lower()
+
+                # Find DIE1 pad position
+                d1_die_num = d1_name_to_num.get(d1_pad_name.upper())
+                if not d1_die_num:
+                    self.logger.warn(f"DIE2 wire: D1 pad '{d1_pad_name}' not found in DIE1")
+                    continue
+                a_pt = apr_coords.get(d1_die_num)
+                if not a_pt:
+                    continue
+
+                # DIE2 pad center (in PDF points)
+                d2_px = d2_cx + pad['x'] * scale
+                d2_py = d2_cy + (-pad['y'] if flip_x else pad['y']) * scale
+
+                # DIE1 pad center (adjust from frame-edge anchor inward)
+                pin_cx, pin_cy = a_pt['pt']
+                a_side = a_pt['side']
+                a_bw, a_bh = a_pt['bw'], a_pt['bh']
+                if a_side == 'L':
+                    d1_px, d1_py = pin_cx + a_bw / 2, pin_cy
+                elif a_side == 'R':
+                    d1_px, d1_py = pin_cx - a_bw / 2, pin_cy
+                elif a_side == 'B':
+                    d1_px, d1_py = pin_cx, pin_cy + a_bh / 2
+                elif a_side == 'T':
+                    d1_px, d1_py = pin_cx, pin_cy - a_bh / 2
+                else:
+                    d1_px, d1_py = pin_cx, pin_cy
+
+                # Wire color by type
+                if conn_type == 'power':
+                    wire_color = colors.red
+                else:
+                    wire_color = colors.HexColor('#8B4513')  # brown for signal
+
+                c.saveState()
+                c.setStrokeColor(wire_color)
+                c.setLineWidth(0.6)
+                c.line(d2_px, d2_py, d1_px, d1_py)
+                # Dots at both ends
+                c.setFillColor(wire_color)
+                c.circle(d2_px, d2_py, 1.2, stroke=0, fill=1)
+                c.circle(d1_px, d1_py, 1.2, stroke=0, fill=1)
+                c.restoreState()
+                n_wires += 1
+
+            if n_wires:
+                self.logger.info(f"  DIE1-DIE2 wires: {n_wires} connections drawn")
 
 # --- Checker Class ---
 class Checker:
@@ -2100,11 +2279,14 @@ class Writer:
                 def norm(v):
                     return v if v and v.strip() else '-'
 
+                def norm_pkg(v):
+                    return '0' if not v or not v.strip() or v.strip() == '-' else v.strip()
+
                 for r in self.parser.data:
                     # Skip empty rows (no PKG_NUM and no DIE_NUM)
                     if norm(r['PKG_NUM']) == '-' and norm(r['DIE_NUM']) == '-':
                         continue
-                    row_str = f"{norm(r['PKG_NUM']):<8} {norm(r['PKG_PIN_NAME']):<12} {norm(r['DIE_NUM']):<12} {norm(r['DIE_PIN_NAME']):<20} {norm(r['IO_CELL_NAME']):<12} {norm(r['PKG_LOC']):<10} {norm(r['DIE_LOC']):<18} "
+                    row_str = f"{norm_pkg(r['PKG_NUM']):<8} {norm(r['PKG_PIN_NAME']):<12} {norm(r['DIE_NUM']):<12} {norm(r['DIE_PIN_NAME']):<20} {norm(r['IO_CELL_NAME']):<12} {norm(r['PKG_LOC']):<10} {norm(r['DIE_LOC']):<18} "
                     if len(h) > 7: row_str += f"{norm(r['DIRECTION']):<10} "
                     if len(h) > 8: row_str += f"{norm(r['LOAD']):<6} "
                     if len(h) > 9: row_str += f"{norm(r['SLEW']):<6} "
@@ -2134,6 +2316,7 @@ class Writer:
                     if norm(r['PKG_NUM']) == '-' and norm(r['DIE_NUM']) == '-':
                         continue
                     row = {field: norm(r[field]) for field in h}
+                    row['PKG_NUM'] = r['PKG_NUM'] if r['PKG_NUM'] and r['PKG_NUM'].strip() and r['PKG_NUM'].strip() != '-' else '0'
                     writer.writerow(row)
         except Exception as e:
             self.logger.error(f"Error in CSV writer: {e}")
@@ -2220,9 +2403,10 @@ def main():
     p.add_argument("-stagger-max", type=int, default=8, help="Max consecutive I/O pins before warning (default: 8)")
     p.add_argument("-all", action="store_true", help="All functions")
     p.add_argument("-o", "--outdir", default=".", help="Output folder (default: current directory)")
-    p.add_argument("--die2", help="DIE2 spec file (markdown)")
-    p.add_argument("--die2-loc", dest="die2_loc", help="DIE2 bottom-left x,y in um (relative to DIE1 center)")
-    p.add_argument("--die2-label", dest="die2_label", default="DIE2", help="DIE2 label in PDF (default: DIE2)")
+    p.add_argument("--die2", help="DIE2 spec file (.csv or .md)")
+    p.add_argument("--die2-loc", dest="die2_loc", help="DIE2 bottom-left x,y in um, relative to DIE1 center (only for .md)")
+    p.add_argument("--die2-label", dest="die2_label", default=None, help="DIE2 label in PDF (default: from CSV or 'DIE2')")
+    p.add_argument("--die2-flip-x", dest="die2_flip_x", action="store_true", help="Flip DIE2 along X-axis (mirror B/T sides)")
     args = p.parse_args()
     if args.v is not None and len(args.v) == 0:
         args.v = None
@@ -2299,19 +2483,30 @@ def main():
     if args.die2:
         logger.section(f"DIE2 Overlay: {args.die2}")
         logger.indent()
-        die2_info = parse_die2_md(args.die2, logger)
-        if args.die2_loc:
-            try:
-                parts = args.die2_loc.split(',')
-                die2_loc = (float(parts[0]), float(parts[1]))
-            except (ValueError, IndexError):
-                logger.error(f"Invalid -die2_loc format: '{args.die2_loc}'. Expected 'x,y'.")
-                die2_info = None
+        if args.die2.lower().endswith('.csv'):
+            die2_info = parse_die2_csv(args.die2, logger)
+            # loc is embedded in CSV (relative to DIE1 bottom-left)
+            if die2_info and die2_info.get('loc'):
+                die2_loc = die2_info['loc']
+            if die2_info and args.die2_label:
+                die2_info['name'] = args.die2_label
+        else:
+            die2_info = parse_die2_md(args.die2, logger)
+            if args.die2_loc:
+                try:
+                    parts = args.die2_loc.split(',')
+                    die2_loc = (float(parts[0]), float(parts[1]))
+                except (ValueError, IndexError):
+                    logger.error(f"Invalid -die2_loc format: '{args.die2_loc}'. Expected 'x,y'.")
+                    die2_info = None
+        if die2_info and args.die2_flip_x:
+            die2_info['flip_x'] = True
         logger.dedent()
 
     if args.apr or args.pkg or args.combined:
         logger.section("PDF Generation")
-        pg = PDFGen(logger, parser, die2_info=die2_info, die2_loc=die2_loc, die2_label=args.die2_label)
+        die2_label = args.die2_label or (die2_info.get('name') if die2_info else None) or "DIE2"
+        pg = PDFGen(logger, parser, die2_info=die2_info, die2_loc=die2_loc, die2_label=die2_label)
         logger.indent()
         if args.apr: pg.generate_apr_pdf(f"{prefix}_apr.pdf")
         if args.pkg: pg.generate_pkg_pdf(f"{prefix}_pkg.pdf")
