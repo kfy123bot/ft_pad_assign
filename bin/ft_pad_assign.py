@@ -22,7 +22,7 @@ except ImportError:
 
 import datetime
 
-VERSION = "v3.0"
+VERSION = "v3.1"
 
 # --- Logger Class ---
 class Logger:
