@@ -2220,7 +2220,7 @@ class PDFGen:
             pad_sz = self._compute_optimal_pad_size(pads, scale)
 
         font_sz = 5  # unified font size for all overlay pad labels
-        gap = 2  # gap from frame edge in points
+        gap = 1  # gap from frame edge in points
 
         # Frame edges in PDF coords
         frame_left = die_cx - draw_w_pts / 2
