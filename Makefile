@@ -24,6 +24,7 @@ build: $(CPP_SRC)
 test_py:
 	@echo "--- Testing Python Version ---"
 	@for list in $(EXAMPLES); do \
+		case "$$list" in *JD1750_PSRAM*|*DIE3_example*) continue ;; esac ; \
 		python3 $(PY_BIN) -list $$list -v $(V_FILES) -all -o test_out ; \
 	done
 	@echo "Python tests complete."
@@ -34,19 +35,29 @@ run:
 test_die2:
 	@echo "--- Testing DIE2 Overlay ---"
 	@for list in $(EXAMPLES); do \
-		case "$$list" in *JD1750_PSRAM*) continue ;; esac ; \
+		case "$$list" in *JD1750_PSRAM*|*DIE3_example*) continue ;; esac ; \
 		echo "=== $$list ===" ; \
 		python3 $(PY_BIN) -list $$list --die2 examples/JD1750_PSRAM.csv -all -o test_out ; \
 	done
 	@echo "DIE2 overlay tests complete."
 test_die2_flip_x:
-	@echo "--- Testing DIE2 Overlay ---"
+	@echo "--- Testing DIE2 Overlay (deprecated --die2-flip-x) ---"
 	@for list in $(EXAMPLES); do \
-		case "$$list" in *JD1750_PSRAM*) continue ;; esac ; \
+		case "$$list" in *JD1750_PSRAM*|*DIE3_example*) continue ;; esac ; \
 		echo "=== $$list ===" ; \
 		python3 $(PY_BIN) -list $$list --die2 examples/JD1750_PSRAM.csv --die2-flip-x -all -o test_out ; \
 	done
 	@echo "DIE2 overlay tests complete."
+
+# 2c. Test DIE3 Overlay
+test_die3:
+	@echo "--- Testing DIE3 Overlay ---"
+	@for list in $(EXAMPLES); do \
+		case "$$list" in *JD1750_PSRAM*|*DIE3_example*) continue ;; esac ; \
+		echo "=== $$list ===" ; \
+		python3 $(PY_BIN) -list $$list --die2 examples/JD1750_PSRAM.csv --die3 examples/DIE3_example.csv -all -o test_out ; \
+	done
+	@echo "DIE3 overlay tests complete."
 
 # 3. Test Perl Version
 test_pl:
@@ -89,9 +100,10 @@ help:
 	@echo "make build     : Compile C++ version to $(CPP_BIN)"
 	@echo "make test_py   : Run tests using Python script"
 	@echo "make test_die2 : Run tests with DIE2 overlay (PSRAM)"
+	@echo "make test_die3 : Run tests with DIE2+DIE3 overlay"
 	@echo "make test_pl   : Run tests using Perl script"
 	@echo "make test_cpp  : Compile and run tests using C++ binary"
 	@echo "make test_all  : Run tests for all 3 languages (Py/Pl/Cpp)"
 	@echo "make clean     : Remove all binaries and generated files"
 
-.PHONY: all build test_py test_die2 test_pl test_cpp test_all clean help
+.PHONY: all build test_py test_die2 test_die2_flip_x test_die3 test_pl test_cpp test_all clean help

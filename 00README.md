@@ -1,3 +1,35 @@
+# 00README — 2026-05-11 Session Changes
+
+## DIE3 Overlay + PLACEMENT Header
+
+### 新增功能
+- 新增 `--die3` CLI 參數，支援第三顆 die overlay（僅 CSV 格式）
+- DIE3 使用 teal 色系（`#008080`），DIE2 維持 brown（`#8B4513`）
+- DIE3 CSV 格式與 DIE2 相同，使用 `D3_NUM`、`D3_PAD_NAME`、`DIE3_NAME`、`DIE3_LOC` 前綴
+- DIE3 只連接到 DIE1 pad（與 DIE2 相同）
+
+### PLACEMENT 標頭
+- 新增 `PLACEMENT` CSV 標頭，取代 `--die2-flip-x` CLI 參數
+- 支援值：`R0`、`R90`、`R180`、`R270`、`R0_FLIP_X`、`R90_FLIP_X`、`R180_FLIP_X`、`R270_FLIP_X`
+- 預設為 `R0`（無旋轉、無翻轉）
+- 旋轉影響整顆 die（frame + pad + label），以 die 中心為旋轉點
+- R90/R270 會交換 frame 的寬高
+- `--die2-flip-x` 標記為 deprecated，仍可使用但會顯示警告
+
+### 程式碼重構
+- 新增 `parse_die_csv()` 統一解析器，支援 DIE2 和 DIE3 CSV
+- `parse_die2_csv()` 改為 thin wrapper
+- `_draw_die2_overlay()` 重構為 `_draw_die_overlay()`，支援 color scheme 參數
+- PDFGen 使用 `self.overlays` list 管理多顆 die overlay
+- 新增 `rotate_point()` 輔助函數
+- 新增 `PLACEMENT_TRANSFORMS`、`DIE2_COLORS`、`DIE3_COLORS` 常數
+
+### 新增檔案
+- `examples/DIE3_example.csv` — DIE3 範例檔案
+- Makefile 新增 `test_die3` target
+
+---
+
 # 00README — 2026-05-04 Session Changes
 
 ## DIE_SIZE 標頭支援

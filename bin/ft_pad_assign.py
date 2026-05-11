@@ -129,6 +129,37 @@ QFN_PHYSICAL_SPECS = {
     88: (9.0, 0.5, 0.25, 0.50, 7.00),
 }
 
+# --- Placement Transforms ---
+# Maps PLACEMENT header value → (rotation_degrees, flip_x)
+PLACEMENT_TRANSFORMS = {
+    'R0': (0, False), 'R90': (90, False), 'R180': (180, False), 'R270': (270, False),
+    'R0_FLIP_X': (0, True), 'R90_FLIP_X': (90, True), 'R180_FLIP_X': (180, True), 'R270_FLIP_X': (270, True),
+}
+
+# --- DIE Overlay Color Scheme (unified for all overlay dies) ---
+DIE_OVERLAY_COLORS = {
+    'frame': '#8B4513',      # brown
+    'signal': '#8B4513',     # brown for signal pads
+    'wire_power': colors.red,
+    'wire_signal': '#8B4513',
+}
+
+def rotate_point(x, y, degrees):
+    """Rotate (x, y) around origin.
+    R90:  逆時針 90 度 → (-y, x)
+    R180: 倒過來       → (-x, -y)
+    R270: 順時針 90 度 → (y, -x)
+    """
+    if degrees == 0:
+        return x, y
+    elif degrees == 90:
+        return -y, x
+    elif degrees == 180:
+        return -x, -y
+    elif degrees == 270:
+        return y, -x
+    return x, y
+
 # --- DIE2 Spec Parser ---
 def parse_die2_md(filepath, logger):
     """Parse a DIE2 spec markdown file (e.g. JD1750_PSRAM.md).
@@ -200,24 +231,44 @@ def parse_die2_md(filepath, logger):
     return result
 
 
-def parse_die2_csv(filepath, logger):
-    """Parse DIE2 spec CSV file.
+def parse_die_csv(filepath, die_prefix, logger):
+    """Unified parser for DIE2/DIE3 CSV spec files.
+
+    Args:
+        filepath: Path to CSV file
+        die_prefix: 'DIE2' or 'DIE3'
+        logger: Logger instance
+
     Returns dict: {
-        'name': str,          # DIE2_NAME
-        'die_size': (w, h),   # um
-        'loc': (x, y),        # um, relative to DIE1 bottom-left (0,0)
+        'name': str,              # DIE2_NAME / DIE3_NAME
+        'die_size': (w, h),       # um
+        'loc': (x, y),            # um, relative to DIE1 bottom-left (0,0)
+        'loc_relative': 'bottom_left',
+        'placement': str,         # e.g. 'R0', 'R90_FLIP_X'
+        'rotation': int,          # 0, 90, 180, 270
+        'flip_x': bool,
         'pads': [{'num': str, 'name': str, 'x': float, 'y': float,
                    'd1_pad': str, 'type': str}, ...]
     }
     """
-    result = {'name': 'DIE2', 'die_size': None, 'loc': None, 'loc_relative': 'bottom_left', 'pads': []}
+    pad_prefix = 'D2' if die_prefix == 'DIE2' else 'D3'
+    default_name = die_prefix
+    result = {
+        'name': default_name, 'die_size': None, 'loc': None,
+        'loc_relative': 'bottom_left', 'placement': 'R0',
+        'rotation': 0, 'flip_x': False, 'pads': []
+    }
     logger.info(f"Reading: {filepath}")
     try:
         with open(filepath, 'r') as f:
             lines = f.readlines()
     except Exception as e:
-        logger.error(f"Cannot read DIE2 CSV file: {filepath} ({e}")
+        logger.error(f"Cannot read {die_prefix} CSV file: {filepath} ({e})")
         return result
+
+    name_key = f'{die_prefix}_NAME'
+    loc_key = f'{die_prefix}_LOC'
+    num_key = f'{pad_prefix}_NUM'
 
     # Phase 1: parse KEY : VALUE headers
     data_start = 0
@@ -229,23 +280,35 @@ def parse_die2_csv(filepath, logger):
         if ':' in stripped:
             key, _, val = stripped.partition(':')
             key = key.strip().upper()
-            val = val.strip().rstrip(',').strip()
-            if key == 'DIE2_NAME':
+            val = val.strip().strip(',').strip()
+            if key == name_key:
                 result['name'] = val
-                logger.info(f"  DIE2_NAME: {val}")
+                logger.info(f"  {name_key}: {val}")
             elif key == 'DIE_SIZE':
                 m = re.match(r'(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)', val)
                 if m:
                     result['die_size'] = (float(m.group(1)), float(m.group(2)))
                     logger.info(f"  DIE_SIZE: {m.group(1)}x{m.group(2)} um")
-            elif key == 'DIE2_LOC':
-                parts = val.split(',')
-                if len(parts) == 2:
+            elif key == loc_key:
+                m = re.match(r'([\d.]+)\s*[,xX+\s]\s*([\d.]+)', val)
+                if m:
                     try:
-                        result['loc'] = (float(parts[0]), float(parts[1]))
-                        logger.info(f"  DIE2_LOC: ({parts[0]}, {parts[1]}) um (relative to DIE1 bottom-left)")
+                        result['loc'] = (float(m.group(1)), float(m.group(2)))
+                        logger.info(f"  {loc_key}: ({m.group(1)}, {m.group(2)}) um (relative to DIE1 bottom-left)")
                     except ValueError:
-                        logger.error(f"Invalid DIE2_LOC value: '{val}'")
+                        logger.error(f"Invalid {loc_key} value: '{val}'")
+                else:
+                    logger.error(f"Invalid {loc_key} value: '{val}'")
+            elif key == 'PLACEMENT':
+                val_upper = val.upper().replace(' ', '_')
+                if val_upper in PLACEMENT_TRANSFORMS:
+                    rot, flip = PLACEMENT_TRANSFORMS[val_upper]
+                    result['placement'] = val_upper
+                    result['rotation'] = rot
+                    result['flip_x'] = flip
+                    logger.info(f"  PLACEMENT: {val_upper} (rotation={rot}, flip_x={flip})")
+                else:
+                    logger.error(f"Invalid PLACEMENT value: '{val}'. Valid: {', '.join(PLACEMENT_TRANSFORMS.keys())}")
         else:
             # First non-header, non-blank line → data table starts
             data_start = i
@@ -259,8 +322,8 @@ def parse_die2_csv(filepath, logger):
         cells = [c.strip() for c in stripped.split(',')]
         if len(cells) < 4:
             continue
-        # Skip header row
-        if cells[0].upper() in ('D2_NUM', 'PAD NO.', 'PAD_NUM'):
+        # Skip header row (match D2_NUM, D3_NUM, PAD NO., etc.)
+        if re.match(r'(D[23]_NUM|PAD)', cells[0].upper()):
             continue
         pad_num = cells[0]
         pad_name = cells[1]
@@ -277,6 +340,11 @@ def parse_die2_csv(filepath, logger):
     n_conn = sum(1 for p in result['pads'] if p.get('d1_pad'))
     logger.info(f"  Parsed: {len(result['pads'])} pads ({n_conn} connections)")
     return result
+
+
+def parse_die2_csv(filepath, logger):
+    """Parse DIE2 spec CSV file. Wrapper around parse_die_csv()."""
+    return parse_die_csv(filepath, 'DIE2', logger)
 
 
 # --- Parser Class ---
@@ -1082,12 +1150,19 @@ class Parser:
 
 # --- PDF Generator Class ---
 class PDFGen:
-    def __init__(self, logger, parser, die2_info=None, die2_loc=None, die2_label="DIE2"):
+    def __init__(self, logger, parser, die2_info=None, die2_loc=None, die2_label="DIE2",
+                 die3_info=None, die3_loc=None, die3_label="DIE3"):
         self.logger = logger
         self.parser = parser
         self.die2_info = die2_info
         self.die2_loc = die2_loc   # (x, y) tuple in um
         self.die2_label = die2_label
+        # Overlay list for iteration in combined PDF
+        self.overlays = []
+        if die2_info:
+            self.overlays.append({'info': die2_info, 'loc': die2_loc, 'label': die2_label, 'colors': DIE_OVERLAY_COLORS})
+        if die3_info:
+            self.overlays.append({'info': die3_info, 'loc': die3_loc, 'label': die3_label, 'colors': DIE_OVERLAY_COLORS})
 
     def _get_package_body_mm(self):
         # 1. PKG_SIZE header takes priority (unit: um, convert to mm for internal use)
@@ -1508,8 +1583,43 @@ class PDFGen:
 
             self.logger.info(f"  Ground/DB: key={coord_key}, count={count}")
 
-        if self.die2_info:
-            self._draw_die2_overlay(c, cx, cy, edge_apr_x, edge_apr_y, self.parser.die_size, apr_coords)
+        # Compute unified pad size and label font from all overlays (use smallest)
+        die1_size = self.parser.die_size
+        if die1_size:
+            die1_max = max(die1_size)
+            scale = edge_apr_x / die1_max
+        else:
+            scale = edge_apr_x / 1000
+        unified_pad_sz = None
+        unified_fn_name = None
+        unified_fn_size = None
+        for overlay in self.overlays:
+            pads = overlay['info'].get('pads', [])
+            sz = self._compute_optimal_pad_size(pads, scale)
+            if unified_pad_sz is None or sz < unified_pad_sz:
+                unified_pad_sz = sz
+            # Label font: need frame width in pts
+            info = overlay['info']
+            od_w, od_h = info.get('die_size', (1000, 1000))
+            rot = info.get('rotation', 0)
+            if rot in (90, 270):
+                fw_pts = od_h * scale
+            else:
+                fw_pts = od_w * scale
+            name_s = info.get('name', overlay['label'])
+            size_s = f"{int(od_w)}x{int(od_h)} um"
+            fn, fs = self._compute_label_font_size(name_s, size_s, fw_pts)
+            if unified_fn_name is None or fn < unified_fn_name:
+                unified_fn_name = fn
+            if unified_fn_size is None or fs < unified_fn_size:
+                unified_fn_size = fs
+        for overlay in self.overlays:
+            self._draw_die_overlay(c, cx, cy, edge_apr_x, edge_apr_y, die1_size,
+                                   overlay['info'], overlay['loc'], overlay['label'],
+                                   overlay['colors'], apr_coords,
+                                   pad_sz=unified_pad_sz,
+                                   label_font_name=unified_fn_name,
+                                   label_font_size=unified_fn_size)
         self._draw_scale_bar(c, edge_pkg_x, edge_pkg_y, 'COMBINED', width)
         self._draw_timestamp(c)
         c.save()
@@ -2002,103 +2112,138 @@ class PDFGen:
         c.drawString(40, 30, ts)
         c.drawString(40, 21, f"ft_pad_assign : {VERSION}")
 
-    def _draw_die2_overlay(self, c, cx, cy, edge_apr_x, edge_apr_y, die1_size, apr_coords=None):
-        """Draw DIE2 frame and pads overlaid on the APR diagram.
+    @staticmethod
+    def _compute_optimal_pad_size(pads, scale):
+        """Compute optimal pad box size from minimum adjacent pad spacing."""
+        if len(pads) < 2:
+            return 4 * scale * 0.6
+        min_dist = float('inf')
+        for i in range(len(pads)):
+            for j in range(i + 1, len(pads)):
+                dx = abs(pads[i]['x'] - pads[j]['x'])
+                dy = abs(pads[i]['y'] - pads[j]['y'])
+                if dx < 20 or dy < 20:
+                    dist = (dx**2 + dy**2) ** 0.5
+                    if dist < min_dist:
+                        min_dist = dist
+        if min_dist < float('inf'):
+            return max(min_dist * scale * 0.6, 2)
+        return 4 * scale * 0.6
+
+    @staticmethod
+    def _compute_label_font_size(name_str, size_str, draw_w_pts):
+        """Compute max font size so name and size lines fit within frame width."""
+        # Helvetica-Bold char width ~0.65 * font_sz, regular ~0.55 * font_sz
+        max_name_w = max(len(name_str) * 0.65, 1)
+        max_size_w = max(len(size_str) * 0.55, 1)
+        font_name = min(7, int(draw_w_pts / max_name_w * 0.85))
+        font_size = min(6, int(draw_w_pts / max_size_w * 0.85))
+        return max(font_name, 3), max(font_size, 3)
+
+    def _draw_die_overlay(self, c, cx, cy, edge_apr_x, edge_apr_y, die1_size,
+                          die_info, die_loc, die_label, color_scheme, apr_coords=None,
+                          pad_sz=None, label_font_name=None, label_font_size=None):
+        """Draw a die overlay frame, pads, and connection wires.
 
         Args:
             c: ReportLab canvas
             cx, cy: Center of DIE1 frame in PDF points
             edge_apr_x, edge_apr_y: DIE1 frame dimensions in points
             die1_size: DIE1 die_size tuple (w, h) in um, or None
+            die_info: parsed die dict (from parse_die_csv)
+            die_loc: (x, y) tuple in um
+            die_label: display label string
+            color_scheme: dict with 'frame', 'signal', 'wire_power', 'wire_signal' colors
             apr_coords: dict of DIE1 APR pad positions keyed by DIE_NUM (for connection wires)
         """
-        if not self.die2_info or not self.die2_loc:
-            return
-        die2_size = self.die2_info.get('die_size')
-        pads = self.die2_info.get('pads', [])
-        if not die2_size:
-            self.logger.error("DIE2: missing DIE_SIZE in spec file.")
+        die_size = die_info.get('die_size')
+        pads = die_info.get('pads', [])
+        if not die_size:
+            self.logger.error(f"{die_label}: missing DIE_SIZE in spec file.")
             return
 
-        loc_x, loc_y = self.die2_loc
-        d2_w, d2_h = die2_size
+        loc_x, loc_y = die_loc
+        d_w, d_h = die_size
+        rotation = die_info.get('rotation', 0)
+        flip_x = die_info.get('flip_x', False)
 
         # Compute scale: same as DIE1
         if die1_size:
             die1_x, die1_y = die1_size
             scale = edge_apr_x / max(die1_x, die1_y)
         else:
-            # Fallback: use DIE2's own size to fit within the APR frame
-            scale = edge_apr_x / max(d2_w, d2_h)
+            scale = edge_apr_x / max(d_w, d_h)
 
-        # Convert DIE2_LOC to DIE1-center-relative coords
+        # Convert loc to DIE1-center-relative coords
         # CSV: loc is relative to DIE1 bottom-left (0,0) → subtract half of DIE1
         # MD:  loc is already relative to DIE1 center → no conversion
-        if self.die2_info.get('loc_relative') == 'bottom_left' and die1_size:
+        if die_info.get('loc_relative') == 'bottom_left' and die1_size:
             loc_x = loc_x - die1_size[0] / 2
             loc_y = loc_y - die1_size[1] / 2
 
-        # DIE2 frame dimensions in points
-        d2_w_pts = d2_w * scale
-        d2_h_pts = d2_h * scale
+        # Frame dimensions: swap w/h for R90/R270
+        if rotation in (90, 270):
+            draw_w, draw_h = d_h, d_w
+        else:
+            draw_w, draw_h = d_w, d_h
+        draw_w_pts = draw_w * scale
+        draw_h_pts = draw_h * scale
 
-        # DIE2 center in frame coords (um -> points)
-        # Frame bottom-left stays at DIE2_LOC regardless of flip
-        flip_x = self.die2_info.get('flip_x', False)
-        d2_cx = cx + (loc_x + d2_w / 2) * scale
-        d2_cy = cy + (loc_y + d2_h / 2) * scale
+        # Die center stays at loc + half of original size (center doesn't move)
+        die_cx = cx + (loc_x + d_w / 2) * scale
+        die_cy = cy + (loc_y + d_h / 2) * scale
 
-        # Draw DIE2 frame (solid, brown, 30% transparent)
+        # Draw frame (30% transparent)
+        frame_color = color_scheme['frame']
         c.saveState()
-        c.setStrokeColor(colors.HexColor('#8B4513'))
+        c.setStrokeColor(colors.HexColor(frame_color) if isinstance(frame_color, str) else frame_color)
         c.setStrokeAlpha(0.3)
         c.setLineWidth(1.5)
-        c.rect(d2_cx - d2_w_pts / 2, d2_cy - d2_h_pts / 2, d2_w_pts, d2_h_pts, fill=0, stroke=1)
+        c.rect(die_cx - draw_w_pts / 2, die_cy - draw_h_pts / 2, draw_w_pts, draw_h_pts, fill=0, stroke=1)
         c.restoreState()
 
-        # Draw DIE2 label at center
+        # Draw label at center — unified font sizes
+        name_str = die_info.get('name', die_label)
+        size_str = f"{int(d_w)}x{int(d_h)} um"
+        fn_name = label_font_name if label_font_name else 7
+        fn_size = label_font_size if label_font_size else 6
         c.saveState()
-        c.setFont("Helvetica-Bold", 7)
-        c.setFillColor(colors.HexColor('#8B4513'))
-        c.drawCentredString(d2_cx, d2_cy + 4, f"{self.die2_info.get('name', self.die2_label)}")
-        c.setFont("Helvetica", 6)
-        c.drawCentredString(d2_cx, d2_cy - 5, f"{int(d2_w)}x{int(d2_h)} um")
+        c.setFillColor(colors.HexColor(frame_color) if isinstance(frame_color, str) else frame_color)
+        c.setFont("Helvetica-Bold", fn_name)
+        c.drawCentredString(die_cx, die_cy + fn_size * 0.7, name_str)
+        c.setFont("Helvetica", fn_size)
+        c.drawCentredString(die_cx, die_cy - fn_size * 0.9, size_str)
         c.restoreState()
 
-        # Draw DIE2 pads — compute pad size from min spacing to avoid overlap
-        pad_sz = 4  # fallback
-        if len(pads) >= 2:
-            # Find minimum distance between adjacent pads (sorted by same-side proximity)
-            min_dist = float('inf')
-            for i in range(len(pads)):
-                for j in range(i + 1, len(pads)):
-                    dx = abs(pads[i]['x'] - pads[j]['x'])
-                    dy = abs(pads[i]['y'] - pads[j]['y'])
-                    # Only compare pads on the same side (similar x or similar y)
-                    if dx < 20 or dy < 20:
-                        dist = (dx**2 + dy**2) ** 0.5
-                        if dist < min_dist:
-                            min_dist = dist
-            if min_dist < float('inf'):
-                # Pad box = 60% of min spacing in points (leave room for labels)
-                pad_sz = max(min_dist * scale * 0.6, 2)
+        # Use provided pad_sz or compute from min spacing
+        if pad_sz is None:
+            pad_sz = self._compute_optimal_pad_size(pads, scale)
 
-        font_sz = max(int(pad_sz * 1.2), 4)
+        font_sz = 5  # unified font size for all overlay pad labels
+        gap = 2  # gap from frame edge in points
 
-        # Draw DIE2 location at bottom-left corner outside frame
+        # Frame edges in PDF coords
+        frame_left = die_cx - draw_w_pts / 2
+        frame_right = die_cx + draw_w_pts / 2
+        frame_bottom = die_cy - draw_h_pts / 2
+        frame_top = die_cy + draw_h_pts / 2
+
+        # Draw location at bottom-left corner INSIDE frame (with margin)
         c.saveState()
         c.setFont("Helvetica", font_sz)
         c.setFillColor(colors.black)
         c.setFillAlpha(0.5)
-        orig_loc = self.die2_info.get('loc', (0, 0))
-        bl_x = d2_cx - d2_w_pts / 2
-        bl_y = d2_cy - d2_h_pts / 2
-        c.drawString(bl_x, bl_y - font_sz * 1.5, f"({orig_loc[0]:.0f},{orig_loc[1]:.0f})")
+        orig_loc = die_info.get('loc', (0, 0))
+        c.drawString(frame_left + gap + 1, frame_bottom + gap + 1, f"({orig_loc[0]:.0f},{orig_loc[1]:.0f})")
         c.restoreState()
 
         for pad in pads:
-            px = d2_cx + pad['x'] * scale
-            py = d2_cy + (-pad['y'] if flip_x else pad['y']) * scale
+            # Apply rotation then flip_x to pad coords (relative to die center)
+            rx, ry = rotate_point(pad['x'], pad['y'], rotation)
+            if flip_x:
+                ry = -ry
+            px = die_cx + rx * scale
+            py = die_cy + ry * scale
 
             # Determine color from pad name (same convention as DIE1)
             name_upper = pad['name'].upper()
@@ -2107,7 +2252,7 @@ class PDFGen:
             elif any(kw in name_upper for kw in ('VSS', 'GND', 'VSSQ')):
                 color = colors.blue
             else:
-                color = colors.HexColor('#8B4513')  # brown for signal
+                color = colors.HexColor(color_scheme['signal'])
 
             # Draw pad rectangle
             c.saveState()
@@ -2116,17 +2261,46 @@ class PDFGen:
             c.setLineWidth(0.5)
             c.rect(px - pad_sz / 2, py - pad_sz / 2, pad_sz, pad_sz, fill=1, stroke=1)
 
-            # Draw pad label (font size scales with pad size)
+            # Draw pad label OUTSIDE the frame
             c.setFont("Helvetica", font_sz)
             c.setFillColor(colors.black)
             c.setFillAlpha(0.5)
-            # Show pad name + actual coordinates (flipped Y if applicable)
-            actual_y = -pad['y'] if flip_x else pad['y']
-            label = f"{pad['name']} ({pad['x']:.0f},{actual_y:.0f})"
-            c.drawString(px + pad_sz / 2 + 1, py - font_sz * 0.3, label)
+            label = pad['name']
+            label_w = font_sz * 0.6 * len(label)
+            # Determine which frame edge this pad is closest to, then place label outside
+            ox, oy = pad['x'], pad['y']
+            if abs(ox) >= abs(oy):
+                # Pad on left or right side
+                if ox >= 0:
+                    # Right side: label starts at frame right edge + gap
+                    lx = frame_right + gap
+                    ly = py - font_sz * 0.3
+                    rot = 0
+                else:
+                    # Left side: label ends at frame left edge - gap
+                    lx = frame_left - gap - label_w
+                    ly = py - font_sz * 0.3
+                    rot = 0
+            else:
+                # Pad on top or bottom side
+                if oy >= 0:
+                    # Top side: label above frame top edge
+                    lx = px - label_w / 2
+                    ly = frame_top + gap
+                    rot = 90
+                else:
+                    # Bottom side: label below frame bottom edge
+                    lx = px + label_w / 2
+                    ly = frame_bottom - gap - font_sz
+                    rot = 90
+            c.saveState()
+            c.translate(lx, ly)
+            c.rotate(rot)
+            c.drawString(0, 0, label)
+            c.restoreState()
             c.restoreState()
 
-        # Draw DIE1-DIE2 connection wires
+        # Draw DIE1 connection wires
         if apr_coords:
             # Build lookup: DIE_PIN_NAME -> DIE_NUM (first match, skip NC/DOWNBOND)
             d1_name_to_num = {}
@@ -2147,15 +2321,18 @@ class PDFGen:
                 # Find DIE1 pad position
                 d1_die_num = d1_name_to_num.get(d1_pad_name.upper())
                 if not d1_die_num:
-                    self.logger.warn(f"DIE2 wire: D1 pad '{d1_pad_name}' not found in DIE1")
+                    self.logger.warn(f"{die_label} wire: D1 pad '{d1_pad_name}' not found in DIE1")
                     continue
                 a_pt = apr_coords.get(d1_die_num)
                 if not a_pt:
                     continue
 
-                # DIE2 pad center (in PDF points)
-                d2_px = d2_cx + pad['x'] * scale
-                d2_py = d2_cy + (-pad['y'] if flip_x else pad['y']) * scale
+                # Die pad center (apply rotation + flip)
+                rx, ry = rotate_point(pad['x'], pad['y'], rotation)
+                if flip_x:
+                    ry = -ry
+                d_px = die_cx + rx * scale
+                d_py = die_cy + ry * scale
 
                 # DIE1 pad center (adjust from frame-edge anchor inward)
                 pin_cx, pin_cy = a_pt['pt']
@@ -2174,23 +2351,23 @@ class PDFGen:
 
                 # Wire color by type
                 if conn_type == 'power':
-                    wire_color = colors.red
+                    wire_color = colors.HexColor(color_scheme['wire_power']) if isinstance(color_scheme['wire_power'], str) else color_scheme['wire_power']
                 else:
-                    wire_color = colors.HexColor('#8B4513')  # brown for signal
+                    wire_color = colors.HexColor(color_scheme['wire_signal'])
 
                 c.saveState()
                 c.setStrokeColor(wire_color)
                 c.setLineWidth(0.6)
-                c.line(d2_px, d2_py, d1_px, d1_py)
+                c.line(d_px, d_py, d1_px, d1_py)
                 # Dots at both ends
                 c.setFillColor(wire_color)
-                c.circle(d2_px, d2_py, 1.2, stroke=0, fill=1)
+                c.circle(d_px, d_py, 1.2, stroke=0, fill=1)
                 c.circle(d1_px, d1_py, 1.2, stroke=0, fill=1)
                 c.restoreState()
                 n_wires += 1
 
             if n_wires:
-                self.logger.info(f"  DIE1-DIE2 wires: {n_wires} connections drawn")
+                self.logger.info(f"  DIE1-{die_label} wires: {n_wires} connections drawn")
 
 # --- Checker Class ---
 class Checker:
@@ -2406,7 +2583,9 @@ def main():
     p.add_argument("--die2", help="DIE2 spec file (.csv or .md)")
     p.add_argument("--die2-loc", dest="die2_loc", help="DIE2 bottom-left x,y in um, relative to DIE1 center (only for .md)")
     p.add_argument("--die2-label", dest="die2_label", default=None, help="DIE2 label in PDF (default: from CSV or 'DIE2')")
-    p.add_argument("--die2-flip-x", dest="die2_flip_x", action="store_true", help="Flip DIE2 along X-axis (mirror B/T sides)")
+    p.add_argument("--die2-flip-x", dest="die2_flip_x", action="store_true", help="[DEPRECATED] Use PLACEMENT : R0_FLIP_X in CSV instead")
+    p.add_argument("--die3", help="DIE3 spec file (.csv only)")
+    p.add_argument("--die3-label", dest="die3_label", default=None, help="DIE3 label in PDF (default: from CSV or 'DIE3')")
     args = p.parse_args()
     if args.v is not None and len(args.v) == 0:
         args.v = None
@@ -2484,14 +2663,16 @@ def main():
         logger.section(f"DIE2 Overlay: {args.die2}")
         logger.indent()
         if args.die2.lower().endswith('.csv'):
-            die2_info = parse_die2_csv(args.die2, logger)
-            # loc is embedded in CSV (relative to DIE1 bottom-left)
+            die2_info = parse_die_csv(args.die2, 'DIE2', logger)
             if die2_info and die2_info.get('loc'):
                 die2_loc = die2_info['loc']
             if die2_info and args.die2_label:
                 die2_info['name'] = args.die2_label
         else:
             die2_info = parse_die2_md(args.die2, logger)
+            die2_info['placement'] = 'R0'
+            die2_info['rotation'] = 0
+            die2_info['flip_x'] = False
             if args.die2_loc:
                 try:
                     parts = args.die2_loc.split(',')
@@ -2499,14 +2680,37 @@ def main():
                 except (ValueError, IndexError):
                     logger.error(f"Invalid -die2_loc format: '{args.die2_loc}'. Expected 'x,y'.")
                     die2_info = None
+        # Backward compat: deprecated --die2-flip-x
         if die2_info and args.die2_flip_x:
+            logger.warn("--die2-flip-x is deprecated. Use PLACEMENT : R0_FLIP_X in CSV.")
             die2_info['flip_x'] = True
+            die2_info['rotation'] = 0
+            die2_info['placement'] = 'R0_FLIP_X'
+        logger.dedent()
+
+    # Parse DIE3 options
+    die3_info = None
+    die3_loc = None
+    if args.die3:
+        logger.section(f"DIE3 Overlay: {args.die3}")
+        logger.indent()
+        if not args.die3.lower().endswith('.csv'):
+            logger.error("DIE3 only supports .csv format")
+        else:
+            die3_info = parse_die_csv(args.die3, 'DIE3', logger)
+            if die3_info and die3_info.get('loc'):
+                die3_loc = die3_info['loc']
+            if die3_info and args.die3_label:
+                die3_info['name'] = args.die3_label
         logger.dedent()
 
     if args.apr or args.pkg or args.combined:
         logger.section("PDF Generation")
         die2_label = args.die2_label or (die2_info.get('name') if die2_info else None) or "DIE2"
-        pg = PDFGen(logger, parser, die2_info=die2_info, die2_loc=die2_loc, die2_label=die2_label)
+        die3_label = args.die3_label or (die3_info.get('name') if die3_info else None) or "DIE3"
+        pg = PDFGen(logger, parser,
+                    die2_info=die2_info, die2_loc=die2_loc, die2_label=die2_label,
+                    die3_info=die3_info, die3_loc=die3_loc, die3_label=die3_label)
         logger.indent()
         if args.apr: pg.generate_apr_pdf(f"{prefix}_apr.pdf")
         if args.pkg: pg.generate_pkg_pdf(f"{prefix}_pkg.pdf")

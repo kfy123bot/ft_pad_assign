@@ -33,7 +33,7 @@ Three Python tools in `bin/`:
 
 | Tool | Purpose |
 |------|---------|
-| `ft_pad_assign.py` (~1720 lines) | Main tool: parse pin lists, generate PDFs and constraint files |
+| `ft_pad_assign.py` (~2520 lines) | Main tool: parse pin lists, generate PDFs and constraint files |
 | `gen_spec_pdf.py` | Generate CSV input specification PDF doc |
 | `gen_ug_excel.py` | Generate user guide Excel doc |
 
@@ -121,46 +121,57 @@ Maps pin count → body size in mm. Used when `PKG_SIZE` header is absent. 0.5mm
 ### QFN Physical Dimensions (`QFN_PHYSICAL_SPECS`, L100)
 Source: JEDEC MO-220 specs in `docs/`. Stores `(body_mm, pitch_mm, pin_width_typ_mm, pin_length_typ_mm, exposed_pad_mm)` per body size. Used for accurate pin pad drawing in PDFs.
 
-## DIE2 Overlay
+## DIE2 / DIE3 Overlay
 
-Overlay a second die (e.g. PSRAM) on APR and Combined PDFs.
+Overlay additional dies (e.g. PSRAM, SRAM) on Combined PDFs. DIE2 uses brown, DIE3 uses teal.
 
 ### CLI Usage
 
 ```bash
-# CSV format (recommended) — all info in one file
-python3 bin/ft_pad_assign.py -list input.csv --die2 docs/JD1750_PSRAM.csv -apr -combined -o out
+# DIE2 only (CSV)
+python3 bin/ft_pad_assign.py -list input.csv --die2 docs/JD1750_PSRAM.csv -combined -o out
 
-# With X-flip (mirror B/T sides)
-python3 bin/ft_pad_assign.py -list input.csv --die2 docs/JD1750_PSRAM.csv --die2-flip-x -apr -combined -o out
+# DIE2 + DIE3
+python3 bin/ft_pad_assign.py -list input.csv --die2 docs/JD1750_PSRAM.csv --die3 examples/DIE3_example.csv -combined -o out
 
-# Markdown format (legacy) — requires separate --die2-loc
-python3 bin/ft_pad_assign.py -list input.csv --die2 docs/JD1750_PSRAM.md --die2-loc="750,514" -apr -combined -o out
+# DIE2 markdown (legacy) — requires --die2-loc
+python3 bin/ft_pad_assign.py -list input.csv --die2 docs/JD1750_PSRAM.md --die2-loc="750,514" -combined -o out
 ```
 
 ### DIE2 CSV Format (`docs/JD1750_PSRAM.csv`)
-
-Header + data table, same style as pin_list.csv:
 
 ```csv
 DIE2_NAME : PSRAM_4MB
 DIE_SIZE : 1000x972
 DIE2_LOC : 750,514
+PLACEMENT : R0
 
 D2_NUM,D2_PAD_NAME,X,Y,D1_PAD,TYPE
 D2.1,VSSQ,450.074,424.188,VSS_IOB,power
 D2.2,DQS,450.074,359.188,PIO_24,signal
-D2.15,NC,-453,411.414,,
 ...
 ```
 
-- `DIE2_NAME`: display name in PDF (optional, default "DIE2")
+### DIE3 CSV Format (`examples/DIE3_example.csv`)
+
+Same structure with `D3_NUM`, `D3_PAD_NAME`, `DIE3_NAME`, `DIE3_LOC` prefixes.
+
+### CSV Header Fields
+
+- `DIE2_NAME` / `DIE3_NAME`: display name in PDF (optional, defaults to "DIE2"/"DIE3")
 - `DIE_SIZE`: die dimensions in um, WxH (required)
-- `DIE2_LOC`: DIE2 bottom-left relative to DIE1 bottom-left (0,0) in um (required)
-- Pad X,Y: relative to DIE2 center in um
+- `DIE2_LOC` / `DIE3_LOC`: bottom-left relative to DIE1 bottom-left (0,0) in um (required)
+- `PLACEMENT`: rotation and flip, one of `R0`, `R90`, `R180`, `R270`, `R0_FLIP_X`, `R90_FLIP_X`, `R180_FLIP_X`, `R270_FLIP_X` (optional, default `R0`)
+- Pad X,Y: relative to die center in um
 - `D1_PAD`: connected DIE1 pad name (optional, empty = no connection)
 - `TYPE`: connection type `signal`/`power` (optional, empty = no connection)
-- `--die2-flip-x`: flip DIE2 along X-axis (mirror B/T sides), negates pad Y coords and shifts frame
+
+### Placement Behavior
+
+- R0: no rotation (default)
+- R90/R180/R270: entire die (frame + pads) rotates around die center
+- FLIP_X: negates pad Y coordinates (mirrors B/T sides)
+- `--die2-flip-x` CLI flag is **deprecated** — use `PLACEMENT : R0_FLIP_X` in CSV instead
 
 ## Output Files
 
@@ -189,6 +200,7 @@ Innovus/ICC2 constraint files only generated when `-v` (verilog) is provided.
 |--------|-------------|
 | `make test_py` | Test Python version against all examples in `examples/` |
 | `make test_die2` | Test DIE2 overlay on all examples |
+| `make test_die3` | Test DIE2+DIE3 overlay on all examples |
 | `make run` | Quick single-file test (qfn40.8803 with verilog) |
 | `make build` | Compile C++ version |
 | `make test_cpp` | Compile and test C++ version |
