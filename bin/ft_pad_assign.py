@@ -2229,12 +2229,29 @@ class PDFGen:
         frame_top = die_cy + draw_h_pts / 2
 
         # Draw location at bottom-left corner INSIDE frame
+        # Check if any pad overlaps with LOC text area
+        loc_text_w = font_sz * 0.6 * 12  # approx width of "(XXXX,YYYY)"
+        loc_text_h = font_sz
+        loc_x0 = frame_left + gap + 1
+        loc_y0 = frame_bottom + gap + 1
+        has_bl_overlap = False
+        for p in pads:
+            rx, ry = rotate_point(p['x'], p['y'], rotation)
+            if flip_x:
+                ry = -ry
+            ppx = die_cx + rx * scale
+            ppy = die_cy + ry * scale
+            if (ppx + pad_sz / 2 > loc_x0 and ppx - pad_sz / 2 < loc_x0 + loc_text_w and
+                    ppy + pad_sz / 2 > loc_y0 and ppy - pad_sz / 2 < loc_y0 + loc_text_h):
+                has_bl_overlap = True
+                break
+        loc_y_offset = pad_sz + gap + 1 if has_bl_overlap else gap + 1
         c.saveState()
         c.setFont("Helvetica", font_sz)
         c.setFillColor(colors.black)
         c.setFillAlpha(0.5)
         orig_loc = die_info.get('loc', (0, 0))
-        c.drawString(frame_left + gap + 1, frame_bottom + gap + 1, f"({orig_loc[0]:.0f},{orig_loc[1]:.0f})")
+        c.drawString(frame_left + gap + 1, frame_bottom + loc_y_offset, f"({orig_loc[0]:.0f},{orig_loc[1]:.0f})")
         c.restoreState()
 
         for pad in pads:
@@ -2282,14 +2299,14 @@ class PDFGen:
                 ly = py - font_sz * 0.35
                 label_rot = 0
             elif side == 'T':
-                # rot=90: text extends UPWARD from anchor, so anchor at text bottom
-                lx = px
+                # rot=90: text extends UP and LEFT from anchor
+                lx = px + font_sz / 2  # center text on pad (text extends left by font_sz)
                 ly = frame_top + gap
                 label_rot = 90
             else:  # B
-                # rot=-90: text extends DOWNWARD from anchor, so anchor at text top
-                lx = px
-                ly = frame_bottom - gap - label_w
+                # rot=-90: text extends DOWN and RIGHT from anchor
+                lx = px - font_sz / 2  # center text on pad (text extends right by font_sz)
+                ly = frame_bottom - gap
                 label_rot = -90
             c.saveState()
             c.translate(lx, ly)
