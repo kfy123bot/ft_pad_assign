@@ -2282,13 +2282,15 @@ class PDFGen:
                 ly = py - font_sz * 0.35
                 label_rot = 0
             elif side == 'T':
+                # rot=90: text extends UPWARD from anchor, so anchor at text bottom
                 lx = px
-                ly = frame_top + gap + label_w
+                ly = frame_top + gap
                 label_rot = 90
             else:  # B
+                # rot=-90: text extends DOWNWARD from anchor, so anchor at text top
                 lx = px
-                ly = frame_bottom - gap
-                label_rot = 90
+                ly = frame_bottom - gap - label_w
+                label_rot = -90
             c.saveState()
             c.translate(lx, ly)
             c.rotate(label_rot)
