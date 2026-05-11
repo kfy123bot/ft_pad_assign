@@ -2228,7 +2228,7 @@ class PDFGen:
         frame_bottom = die_cy - draw_h_pts / 2
         frame_top = die_cy + draw_h_pts / 2
 
-        # Draw location at bottom-left corner INSIDE frame (with margin)
+        # Draw location at bottom-left corner INSIDE frame
         c.saveState()
         c.setFont("Helvetica", font_sz)
         c.setFillColor(colors.black)
@@ -2267,35 +2267,31 @@ class PDFGen:
             c.setFillAlpha(0.5)
             label = pad['name']
             label_w = font_sz * 0.6 * len(label)
-            # Determine which frame edge this pad is closest to, then place label outside
-            ox, oy = pad['x'], pad['y']
-            if abs(ox) >= abs(oy):
-                # Pad on left or right side
-                if ox >= 0:
-                    # Right side: label starts at frame right edge + gap
-                    lx = frame_right + gap
-                    ly = py - font_sz * 0.3
-                    rot = 0
-                else:
-                    # Left side: label ends at frame left edge - gap
-                    lx = frame_left - gap - label_w
-                    ly = py - font_sz * 0.3
-                    rot = 0
+            # Use TRANSFORMED coords to determine which side the pad is on
+            if abs(rx) >= abs(ry):
+                side = 'R' if rx >= 0 else 'L'
             else:
-                # Pad on top or bottom side
-                if oy >= 0:
-                    # Top side: label above frame top edge
-                    lx = px - label_w / 2
-                    ly = frame_top + gap
-                    rot = 90
-                else:
-                    # Bottom side: label below frame bottom edge
-                    lx = px + label_w / 2
-                    ly = frame_bottom - gap - font_sz
-                    rot = 90
+                side = 'T' if ry >= 0 else 'B'
+            # Position label outside frame, centered on pad
+            if side == 'R':
+                lx = frame_right + gap
+                ly = py - font_sz * 0.35
+                label_rot = 0
+            elif side == 'L':
+                lx = frame_left - gap - label_w
+                ly = py - font_sz * 0.35
+                label_rot = 0
+            elif side == 'T':
+                lx = px
+                ly = frame_top + gap + label_w
+                label_rot = 90
+            else:  # B
+                lx = px
+                ly = frame_bottom - gap
+                label_rot = 90
             c.saveState()
             c.translate(lx, ly)
-            c.rotate(rot)
+            c.rotate(label_rot)
             c.drawString(0, 0, label)
             c.restoreState()
             c.restoreState()
