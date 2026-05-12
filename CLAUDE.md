@@ -12,7 +12,7 @@ make test_py
 make run
 
 # Run single file manually
-python3 bin/ft_pad_assign.py -list examples/qfn48.8028.pin_list.csv -o output -all
+python3 bin/ft_pad_assign.py -list examples/qfn56.8803.GPIO.0505_v3.pgpin_list.csv -v examples/va8803.vg -all -o output
 
 # Clean generated files
 make clean
@@ -33,7 +33,7 @@ Three Python tools in `bin/`:
 
 | Tool | Purpose |
 |------|---------|
-| `ft_pad_assign.py` (~2520 lines) | Main tool: parse pin lists, generate PDFs and constraint files |
+| `ft_pad_assign.py` (~2740 lines) | Main tool: parse pin lists, generate PDFs and constraint files |
 | `gen_spec_pdf.py` | Generate CSV input specification PDF doc |
 | `gen_ug_excel.py` | Generate user guide Excel doc |
 
@@ -201,13 +201,15 @@ Innovus/ICC2 constraint files only generated when `-v` (verilog) is provided.
 | `make test_py` | Test Python version against all examples in `examples/` |
 | `make test_die2` | Test DIE2 overlay on all examples |
 | `make test_die3` | Test DIE2+DIE3 overlay on all examples |
-| `make run` | Quick single-file test (qfn40.8803 with verilog) |
+| `make run` | Quick single-file test (qfn56 GPIO with verilog) |
 | `make build` | Compile C++ version |
 | `make test_cpp` | Compile and test C++ version |
 | `make test_pl` | Test Perl version |
 | `make test_all` | Test all three language versions |
 | `make clean` | Remove binaries and `test_out/` |
 
-## Modification Changelog
+## Documentation
 
-Detailed change history is maintained in `00README.md` (session-by-session notes).
+- `docs/CSV_INPUT_SPEC.md` / `.pdf` — formal input format specification
+- `docs/ft_pad_assign_ug.md` / `.xlsx` — user guide (Chinese)
+- `00README.md` — modification changelog (session-by-session notes)

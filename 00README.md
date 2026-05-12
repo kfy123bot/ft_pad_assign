@@ -1,3 +1,14 @@
+# 00README — 2026-05-12 Session Changes (v3.3)
+
+## Bug Fix + ICC2 Format Update
+
+1. 修正 P/G inst missed in i/o const file — `%` 分隔符 pin 的 `INST_NAME` 未设值，导致 constraint 生成器过滤掉 power/ground pad instance
+2. ICC2 pin list in clockwise — `set_io_pad_constraints` 改为 `set_signal_io_constraints`，每个 side 内 instance 顺序反转（逆时钟→顺时钟）
+3. DIE overlay pad label 框外修正 — `parse_die_csv()` 改用 regex wildcard 匹配 `DIE\d+_NAME`/`DIE\d+_LOC`/`D\d+_NUM`，取代硬编码 DIE2/DIE3 前缀
+4. Pad label 超出 PKG 框修正 — T/B side label 的 X 坐标及 L/R side label 的 Y 坐标加 clamp，确保不超出 frame 范围
+
+---
+
 # 00README — 2026-05-11 Session Changes
 
 ## DIE3 Overlay + PLACEMENT Header

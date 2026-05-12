@@ -29,7 +29,7 @@ test_py:
 	done
 	@echo "Python tests complete."
 run:
-	python3 $(PY_BIN) -list examples/qfn40.8803.0505_v3_pg.pin_list.csv  -v examples/va8803.vg -all -o test_out --die2 examples/JD1750_PSRAM.csv --die2-flip-x ; \
+	python3 $(PY_BIN) -list examples/qfn56.8803.GPIO.0505_v3.pgpin_list.csv  -v examples/va8803.vg -all -o test_out --die3 examples/PSRAM_8MB.pin_list.csv --die2 examples/Flash_4MB_GD.pin_list.csv ; \
 
 # 2b. Test DIE2 Overlay (all examples + DIE2 on 8803 examples)
 test_die2:
@@ -52,10 +52,9 @@ test_die2_flip_x:
 # 2c. Test DIE3 Overlay
 test_die3:
 	@echo "--- Testing DIE3 Overlay ---"
-	@for list in $(EXAMPLES); do \
-		case "$$list" in *JD1750_PSRAM*|*DIE3_example*) continue ;; esac ; \
+	@for list in examples/qfn*.csv; do \
 		echo "=== $$list ===" ; \
-		python3 $(PY_BIN) -list $$list --die2 examples/JD1750_PSRAM.csv --die3 examples/DIE3_example.csv -all -o test_out ; \
+		python3 $(PY_BIN) -list $$list --die3 examples/PSRAM_8MB.pin_list.csv --die2 examples/Flash_4MB_GD.pin_list.csv -all -o test_out ; \
 	done
 	@echo "DIE3 overlay tests complete."
 

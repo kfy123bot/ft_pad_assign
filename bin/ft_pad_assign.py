@@ -22,7 +22,7 @@ except ImportError:
 
 import datetime
 
-VERSION = "v3.1"
+VERSION = "v3.3"
 
 # --- Logger Class ---
 class Logger:
@@ -251,7 +251,6 @@ def parse_die_csv(filepath, die_prefix, logger):
                    'd1_pad': str, 'type': str}, ...]
     }
     """
-    pad_prefix = 'D2' if die_prefix == 'DIE2' else 'D3'
     default_name = die_prefix
     result = {
         'name': default_name, 'die_size': None, 'loc': None,
@@ -266,11 +265,7 @@ def parse_die_csv(filepath, die_prefix, logger):
         logger.error(f"Cannot read {die_prefix} CSV file: {filepath} ({e})")
         return result
 
-    name_key = f'{die_prefix}_NAME'
-    loc_key = f'{die_prefix}_LOC'
-    num_key = f'{pad_prefix}_NUM'
-
-    # Phase 1: parse KEY : VALUE headers
+    # Phase 1: parse KEY : VALUE headers (wildcard DIE*_NAME / DIE*_LOC)
     data_start = 0
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -281,24 +276,24 @@ def parse_die_csv(filepath, die_prefix, logger):
             key, _, val = stripped.partition(':')
             key = key.strip().upper()
             val = val.strip().strip(',').strip()
-            if key == name_key:
+            if re.match(r'DIE\d+_NAME$', key):
                 result['name'] = val
-                logger.info(f"  {name_key}: {val}")
+                logger.info(f"  {key}: {val}")
             elif key == 'DIE_SIZE':
                 m = re.match(r'(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)', val)
                 if m:
                     result['die_size'] = (float(m.group(1)), float(m.group(2)))
                     logger.info(f"  DIE_SIZE: {m.group(1)}x{m.group(2)} um")
-            elif key == loc_key:
+            elif re.match(r'DIE\d+_LOC$', key):
                 m = re.match(r'([\d.]+)\s*[,xX+\s]\s*([\d.]+)', val)
                 if m:
                     try:
                         result['loc'] = (float(m.group(1)), float(m.group(2)))
-                        logger.info(f"  {loc_key}: ({m.group(1)}, {m.group(2)}) um (relative to DIE1 bottom-left)")
+                        logger.info(f"  {key}: ({m.group(1)}, {m.group(2)}) um (relative to DIE1 bottom-left)")
                     except ValueError:
-                        logger.error(f"Invalid {loc_key} value: '{val}'")
+                        logger.error(f"Invalid {key} value: '{val}'")
                 else:
-                    logger.error(f"Invalid {loc_key} value: '{val}'")
+                    logger.error(f"Invalid {key} value: '{val}'")
             elif key == 'PLACEMENT':
                 val_upper = val.upper().replace(' ', '_')
                 if val_upper in PLACEMENT_TRANSFORMS:
@@ -322,8 +317,8 @@ def parse_die_csv(filepath, die_prefix, logger):
         cells = [c.strip() for c in stripped.split(',')]
         if len(cells) < 4:
             continue
-        # Skip header row (match D2_NUM, D3_NUM, PAD NO., etc.)
-        if re.match(r'(D[23]_NUM|PAD)', cells[0].upper()):
+        # Skip header row (match D*_NUM, PAD NO., etc.)
+        if re.match(r'(D\d+_NUM|PAD)', cells[0].upper()):
             continue
         pad_num = cells[0]
         pad_name = cells[1]
@@ -1147,6 +1142,7 @@ class Parser:
             cell = pname.split('%')[-1]
             if cell:
                 row['IO_CELL_NAME'] = cell
+                row['INST_NAME'] = cell
 
 # --- PDF Generator Class ---
 class PDFGen:
@@ -1432,6 +1428,7 @@ class PDFGen:
                 c.setStrokeColor(dir_color); c.line(wire_start[0], wire_start[1], wire_end[0], wire_end[1])
 
                 c.setFillColor(dir_color)
+                c.setFillAlpha(0.5)
                 c.circle(wire_start[0], wire_start[1], 1.5, stroke=0, fill=1)
                 c.circle(wire_end[0], wire_end[1], 1.5, stroke=0, fill=1)
 
@@ -2161,6 +2158,9 @@ class PDFGen:
         if not die_size:
             self.logger.error(f"{die_label}: missing DIE_SIZE in spec file.")
             return
+        if die_loc is None:
+            self.logger.error(f"{die_label}: missing {die_label}_LOC in spec file.")
+            return
 
         loc_x, loc_y = die_loc
         d_w, d_h = die_size
@@ -2215,11 +2215,11 @@ class PDFGen:
         c.drawCentredString(die_cx, die_cy - fn_size * 0.9, size_str)
         c.restoreState()
 
-        # Use provided pad_sz or compute from min spacing
+        # Use provided pad_sz or default to wire anchor dot size
         if pad_sz is None:
-            pad_sz = self._compute_optimal_pad_size(pads, scale)
+            pad_sz = 3  # match wire endpoint dot diameter (r=1.5)
 
-        font_sz = 5  # unified font size for all overlay pad labels
+        font_sz = 4  # unified font size for all overlay pad labels
         gap = 1  # gap from frame edge in points
 
         # Frame edges in PDF coords
@@ -2271,48 +2271,20 @@ class PDFGen:
             else:
                 color = colors.HexColor(color_scheme['signal'])
 
-            # Draw pad rectangle
+            # Draw pad rectangle (hollow, 50% transparent)
             c.saveState()
             c.setStrokeColor(color)
-            c.setFillColor(color)
+            c.setStrokeAlpha(0.5)
             c.setLineWidth(0.5)
-            c.rect(px - pad_sz / 2, py - pad_sz / 2, pad_sz, pad_sz, fill=1, stroke=1)
+            c.rect(px - pad_sz / 2, py - pad_sz / 2, pad_sz, pad_sz, fill=0, stroke=1)
 
-            # Draw pad label OUTSIDE the frame
+            # Draw pad label centered on pad position
             c.setFont("Helvetica", font_sz)
-            c.setFillColor(colors.black)
-            c.setFillAlpha(0.5)
+            c.setFillColor(color)
+            c.setFillAlpha(0.65)
             label = pad['name']
             label_w = font_sz * 0.6 * len(label)
-            # Use TRANSFORMED coords to determine which side the pad is on
-            if abs(rx) >= abs(ry):
-                side = 'R' if rx >= 0 else 'L'
-            else:
-                side = 'T' if ry >= 0 else 'B'
-            # Position label outside frame, centered on pad
-            if side == 'R':
-                lx = frame_right + gap
-                ly = py - font_sz * 0.35
-                label_rot = 0
-            elif side == 'L':
-                lx = frame_left - gap - label_w
-                ly = py - font_sz * 0.35
-                label_rot = 0
-            elif side == 'T':
-                # rot=90: text extends UP and LEFT from anchor
-                lx = px + font_sz / 2  # center text on pad (text extends left by font_sz)
-                ly = frame_top + gap
-                label_rot = 90
-            else:  # B
-                # rot=-90: text extends DOWN and RIGHT from anchor
-                lx = px - font_sz / 2  # center text on pad (text extends right by font_sz)
-                ly = frame_bottom - gap
-                label_rot = -90
-            c.saveState()
-            c.translate(lx, ly)
-            c.rotate(label_rot)
-            c.drawString(0, 0, label)
-            c.restoreState()
+            c.drawString(px - label_w / 2, py - font_sz * 0.35, label)
             c.restoreState()
 
         # Draw DIE1 connection wires
@@ -2372,10 +2344,12 @@ class PDFGen:
 
                 c.saveState()
                 c.setStrokeColor(wire_color)
+                c.setStrokeAlpha(0.5)
                 c.setLineWidth(0.6)
                 c.line(d_px, d_py, d1_px, d1_py)
                 # Dots at both ends
                 c.setFillColor(wire_color)
+                c.setFillAlpha(0.5)
                 c.circle(d_px, d_py, 1.2, stroke=0, fill=1)
                 c.circle(d1_px, d1_py, 1.2, stroke=0, fill=1)
                 c.restoreState()
@@ -2535,7 +2509,7 @@ class Writer:
                 if loc in sides: sides[loc].append(inst)
 
             with open(filename, 'w') as f:
-                f.write("( globals\n    version = 3\n    io_order = default\n)\n")
+                f.write("( globals\n    version = 3\n    io_order = counterclockwise\n)\n")
                 f.write("( iopad\n")
                 s_map = {'L': 'left', 'B': 'bottom', 'R': 'right', 'T': 'top'}
                 for code in ['L', 'B', 'R', 'T']:
@@ -2543,7 +2517,7 @@ class Writer:
                     f.write(f"    ( {s_map[code]}\n")
                     f.write(f"        ( locals ring_number = 1 )\n")
                     for inst in sides[code]:
-                        f.write(f"        ( inst name=\"{inst}\" offset=0 orientation=R0 place_status=fixed spacing=0 )\n")
+                        f.write(f"        ( inst name=\"{inst}\" place_status=fixed spacing=0 )\n")
                     f.write("    )\n")
                 f.write(")\n")
         except Exception as e:
@@ -2570,15 +2544,19 @@ class Writer:
                 loc = row['DIE_LOC'].upper()
                 if loc in sides: sides[loc].append(inst)
 
+            # Reverse each side for clockwise ordering (ICC2 convention)
+            for code in sides:
+                sides[code].reverse()
+
             with open(filename, 'w') as f:
                 f.write("# ICC2 IO Assignment File (Tcl commands)\n\n")
                 s_map = {'L': 'left', 'B': 'bottom', 'R': 'right', 'T': 'top'}
                 for code in ['L', 'B', 'R', 'T']:
                     if not sides[code]: continue
-                    f.write(f"set_io_pad_constraints -side {s_map[code]} -pad_names {{\\\n")
-                    for inst in sides[code]:
-                        f.write(f"    {inst} \\\n")
-                    f.write("}\n\n")
+                    insts = ' '.join(sides[code])
+                    f.write(f"set_signal_io_constraints -constraint {{{{order_only}} \\\n")
+                    f.write(f"    {insts}}} \\\n")
+                    f.write(f"    -io_guide_object {{ring.{s_map[code]}}}\n\n")
         except Exception as e:
             self.logger.error(f"Error in ICC2 writer: {e}")
 
