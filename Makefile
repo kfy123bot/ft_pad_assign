@@ -24,7 +24,7 @@ build: $(CPP_SRC)
 test_py:
 	@echo "--- Testing Python Version ---"
 	@for list in $(EXAMPLES); do \
-		case "$$list" in *JD1750_PSRAM*|*DIE3_example*) continue ;; esac ; \
+		case "$$list" in *JD1750_PSRAM*|*DIE3_example*|*DIE2_bond*|*Flash_*|*PSRAM_*) continue ;; esac ; \
 		python3 $(PY_BIN) -list $$list -v $(V_FILES) -all -o test_out ; \
 	done
 	@echo "Python tests complete."
@@ -35,7 +35,7 @@ run:
 test_die2:
 	@echo "--- Testing DIE2 Overlay ---"
 	@for list in $(EXAMPLES); do \
-		case "$$list" in *JD1750_PSRAM*|*DIE3_example*) continue ;; esac ; \
+		case "$$list" in *JD1750_PSRAM*|*DIE3_example*|*DIE2_bond*|*Flash_*|*PSRAM_*) continue ;; esac ; \
 		echo "=== $$list ===" ; \
 		python3 $(PY_BIN) -list $$list --die2 examples/JD1750_PSRAM.csv -all -o test_out ; \
 	done
@@ -43,20 +43,40 @@ test_die2:
 test_die2_flip_x:
 	@echo "--- Testing DIE2 Overlay (deprecated --die2-flip-x) ---"
 	@for list in $(EXAMPLES); do \
-		case "$$list" in *JD1750_PSRAM*|*DIE3_example*) continue ;; esac ; \
+		case "$$list" in *JD1750_PSRAM*|*DIE3_example*|*DIE2_bond*|*Flash_*|*PSRAM_*) continue ;; esac ; \
 		echo "=== $$list ===" ; \
 		python3 $(PY_BIN) -list $$list --die2 examples/JD1750_PSRAM.csv --die2-flip-x -all -o test_out ; \
 	done
 	@echo "DIE2 overlay tests complete."
 
 # 2c. Test DIE3 Overlay
-test_die3:
+test_die3_cent:
 	@echo "--- Testing DIE3 Overlay ---"
 	@for list in examples/qfn*.csv; do \
 		echo "=== $$list ===" ; \
 		python3 $(PY_BIN) -list $$list --die3 examples/PSRAM_8MB.pin_list.csv --die2 examples/Flash_4MB_GD.pin_list.csv -all -o test_out ; \
 	done
 	@echo "DIE3 overlay tests complete."
+
+test_die3_orig:
+	@echo "--- Testing DIE3 Overlay ---"
+	@for list in examples/qfn*.csv; do \
+		echo "=== $$list ===" ; \
+		python3 $(PY_BIN) -list $$list --die3 examples/PSRAM_8MB.pin_list.csv --die2 examples/Flash_2MB_EON.pin_list.csv -all -o test_out ; \
+	done
+	@echo "DIE3 overlay tests complete."
+
+# 2d. Compact mode (skip .new, apr/pkg PDFs, stagger.rpt)
+run_compact:
+	python3 $(PY_BIN) -list examples/qfn56.8803.GPIO.0505_v3.pgpin_list.csv -v examples/va8803.vg --die3 examples/PSRAM_8MB.pin_list.csv --die2 examples/Flash_4MB_GD.pin_list.csv -all --compact -o test_out
+
+test_die3_compact:
+	@echo "--- Testing DIE3 Overlay (compact) ---"
+	@for list in examples/qfn*.csv; do \
+		echo "=== $$list ===" ; \
+		python3 $(PY_BIN) -list $$list --die3 examples/PSRAM_8MB.pin_list.csv --die2 examples/Flash_2MB_EON.pin_list.csv -all --compact -o test_out ; \
+	done
+	@echo "DIE3 compact tests complete."
 
 # 3. Test Perl Version
 test_pl:
@@ -100,9 +120,11 @@ help:
 	@echo "make test_py   : Run tests using Python script"
 	@echo "make test_die2 : Run tests with DIE2 overlay (PSRAM)"
 	@echo "make test_die3 : Run tests with DIE2+DIE3 overlay"
+	@echo "make test_die3_compact : DIE2+DIE3 overlay (compact: no .new, apr/pkg PDFs, stagger)"
+	@echo "make run_compact       : Quick single-file compact test"
 	@echo "make test_pl   : Run tests using Perl script"
 	@echo "make test_cpp  : Compile and run tests using C++ binary"
 	@echo "make test_all  : Run tests for all 3 languages (Py/Pl/Cpp)"
 	@echo "make clean     : Remove all binaries and generated files"
 
-.PHONY: all build test_py test_die2 test_die2_flip_x test_die3 test_pl test_cpp test_all clean help
+.PHONY: all build test_py test_die2 test_die2_flip_x test_die3 test_die3_compact test_pl test_cpp test_all clean help

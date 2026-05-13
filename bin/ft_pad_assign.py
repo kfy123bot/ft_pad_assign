@@ -309,7 +309,8 @@ def parse_die_csv(filepath, die_prefix, logger):
             data_start = i
             break
 
-    # Phase 2: parse data table (skip header row)
+    # Phase 2: detect format from header row, then parse data
+    has_d1_num_col = False  # whether CSV has D1_NUM column (new 7-col format)
     for line in lines[data_start:]:
         stripped = line.strip()
         if not stripped:
@@ -317,8 +318,11 @@ def parse_die_csv(filepath, die_prefix, logger):
         cells = [c.strip() for c in stripped.split(',')]
         if len(cells) < 4:
             continue
-        # Skip header row (match D*_NUM, PAD NO., etc.)
+        # Detect header row and check for D1_NUM column
         if re.match(r'(D\d+_NUM|PAD)', cells[0].upper()):
+            header_upper = [c.upper() for c in cells]
+            if 'D1_NUM' in header_upper:
+                has_d1_num_col = True
             continue
         pad_num = cells[0]
         pad_name = cells[1]
@@ -327,10 +331,53 @@ def parse_die_csv(filepath, die_prefix, logger):
             y = float(cells[3])
         except ValueError:
             continue
-        d1_pad = cells[4].strip() if len(cells) > 4 and cells[4].strip() else ''
-        conn_type = cells[5].strip() if len(cells) > 5 and cells[5].strip() else ''
+        # New format: D2_NUM, D2_PAD_NAME, X, Y, D1_NUM, D1_PAD, TYPE
+        # Old format: D2_NUM, D2_PAD_NAME, X, Y, D1_PAD, TYPE
+        d1_num = ''
+        d1_pad = ''
+        conn_type = ''
+        if has_d1_num_col and len(cells) >= 7:
+            d1_num = cells[4].strip() if cells[4].strip() else ''
+            d1_pad = cells[5].strip() if cells[5].strip() else ''
+            conn_type = cells[6].strip() if cells[6].strip() else ''
+        elif len(cells) >= 6:
+            d1_pad = cells[4].strip() if cells[4].strip() else ''
+            conn_type = cells[5].strip() if cells[5].strip() else ''
+        elif len(cells) >= 5:
+            d1_pad = cells[4].strip() if cells[4].strip() else ''
         result['pads'].append({'num': pad_num, 'name': pad_name, 'x': x, 'y': y,
-                               'd1_pad': d1_pad, 'type': conn_type})
+                               'd1_num': d1_num, 'd1_pad': d1_pad, 'type': conn_type})
+
+    # Save original coords (before any transform) for bond CSV output
+    result['pads_original'] = [{'num': p['num'], 'name': p['name'],
+                                 'x': p['x'], 'y': p['y'],
+                                 'd1_num': p.get('d1_num', ''),
+                                 'd1_pad': p.get('d1_pad', ''),
+                                 'type': p.get('type', '')}
+                                for p in result['pads']]
+
+    # Auto-detect coordinate origin: bottom-left (0,0) vs center (0,0)
+    # Per-axis: min ≈ 0 AND midpoint far from origin → bottom-left
+    # If ANY axis is bottom-left → shift BOTH axes (same coordinate system)
+    if result['pads'] and result['die_size']:
+        w, h = result['die_size']
+        xs = [p['x'] for p in result['pads']]
+        ys = [p['y'] for p in result['pads']]
+        mid_x = (min(xs) + max(xs)) / 2.0
+        mid_y = (min(ys) + max(ys)) / 2.0
+
+        x_bl = min(xs) >= 0 and min(xs) < w * 0.2 and abs(mid_x) > w * 0.2
+        y_bl = min(ys) >= 0 and min(ys) < h * 0.2 and abs(mid_y) > h * 0.2
+
+        if x_bl or y_bl:
+            # Bottom-left detected → shift both axes to center (for PDF drawing)
+            for p in result['pads']:
+                p['x'] = round(p['x'] - mid_x, 3)
+                p['y'] = round(p['y'] - mid_y, 3)
+            xs2 = [p['x'] for p in result['pads']]
+            ys2 = [p['y'] for p in result['pads']]
+            logger.info(f"  Auto-shifted coords to center (0,0): "
+                        f"X [{min(xs2):.1f}, {max(xs2):.1f}], Y [{min(ys2):.1f}, {max(ys2):.1f}]")
 
     n_conn = sum(1 for p in result['pads'] if p.get('d1_pad'))
     logger.info(f"  Parsed: {len(result['pads'])} pads ({n_conn} connections)")
@@ -354,6 +401,8 @@ class Parser:
         self.v_insts = {}
         self.v_net_to_inst = {}
         self.v_raw_insts = {}
+        self.orig_die_to_new = {}  # original DIE_NUM -> reindexed DIE_NUM
+        self.d1_name_to_num = {}   # DIE_PIN_NAME -> reindexed DIE_NUM
 
     def parse_list(self):
         self.logger.section(f"Pin List: {self.list_file}")
@@ -376,6 +425,13 @@ class Parser:
             for row in self.data:
                 row['_orig_die_num'] = row['DIE_NUM']
             self._reorder_and_reindex_apr_data()
+            # Build lookup: DIE_PIN_NAME -> reindexed DIE_NUM (skip NC/DOWNBOND)
+            for row in self.data:
+                pname = row['DIE_PIN_NAME'].upper()
+                if pname in ('NC', 'DOWNBOND') or row['DIE_NUM'] in ('0', '-'):
+                    continue
+                if pname not in self.d1_name_to_num:
+                    self.d1_name_to_num[pname] = row['DIE_NUM']
             self._parse_die_size()
             self._extract_cell_from_pin_name()
         except Exception as e:
@@ -600,6 +656,7 @@ class Parser:
                     orig_to_new[orig_die_str] = str(idx)
                     idx += 1
             self.logger.info(f"DIE_NUM reindexed: {len(orig_to_new)} unique values (L→B→R→T order)")
+            self.orig_die_to_new = orig_to_new  # original DIE_NUM -> reindexed DIE_NUM
 
         # 3. Dynamic Update for D1.xx
         for ref_row, target_xx in referencing_rows:
@@ -2289,24 +2346,23 @@ class PDFGen:
 
         # Draw DIE1 connection wires
         if apr_coords:
-            # Build lookup: DIE_PIN_NAME -> DIE_NUM (first match, skip NC/DOWNBOND)
-            d1_name_to_num = {}
-            for row in self.parser.data:
-                pname = row['DIE_PIN_NAME'].upper()
-                if pname in ('NC', 'DOWNBOND') or row['DIE_NUM'] in ('0', '-'):
-                    continue
-                if pname not in d1_name_to_num:
-                    d1_name_to_num[pname] = row['DIE_NUM']
+            d1_name_to_num = self.parser.d1_name_to_num
+            orig_die_to_new = self.parser.orig_die_to_new
 
             n_wires = 0
             for pad in pads:
                 d1_pad_name = pad.get('d1_pad', '').strip()
+                d1_num_csv = pad.get('d1_num', '').strip()
                 if not d1_pad_name:
                     continue
                 conn_type = pad.get('type', 'signal').strip().lower()
 
-                # Find DIE1 pad position
-                d1_die_num = d1_name_to_num.get(d1_pad_name.upper())
+                if d1_num_csv:
+                    # CSV has D1_NUM: convert to reindexed, use directly
+                    d1_die_num = orig_die_to_new.get(d1_num_csv, d1_num_csv)
+                else:
+                    # No D1_NUM: look up by name
+                    d1_die_num = d1_name_to_num.get(d1_pad_name.upper())
                 if not d1_die_num:
                     self.logger.warn(f"{die_label} wire: D1 pad '{d1_pad_name}' not found in DIE1")
                     continue
@@ -2579,11 +2635,13 @@ def main():
     p.add_argument("--die2-flip-x", dest="die2_flip_x", action="store_true", help="[DEPRECATED] Use PLACEMENT : R0_FLIP_X in CSV instead")
     p.add_argument("--die3", help="DIE3 spec file (.csv only)")
     p.add_argument("--die3-label", dest="die3_label", default=None, help="DIE3 label in PDF (default: from CSV or 'DIE3')")
+    p.add_argument("--compact", action="store_true", help="Compact output: skip .new, apr/pkg PDFs, stagger.rpt")
     args = p.parse_args()
     if args.v is not None and len(args.v) == 0:
         args.v = None
 
     if args.all: args.apr = args.pkg = args.combined = args.c = args.stagger = True
+    if args.compact: args.apr = args.pkg = args.stagger = False
 
     # 1. Initial Logger
     logger = Logger() # Defaults to stdout only if no filename
@@ -2642,7 +2700,8 @@ def main():
         logger.section("Constraint Files")
         logger.indent()
         w = Writer(logger, parser)
-        w.generate_completed_list(f"{prefix}.new")
+        if not args.compact:
+            w.generate_completed_list(f"{prefix}.new")
         w.generate_completed_csv(f"{prefix}.new.csv")
         if args.v:
             w.generate_innovus_io(f"{prefix}_chip.inn.const")
@@ -2657,6 +2716,8 @@ def main():
         logger.indent()
         if args.die2.lower().endswith('.csv'):
             die2_info = parse_die_csv(args.die2, 'DIE2', logger)
+            if die2_info:
+                die2_info['input_path'] = args.die2
             if die2_info and die2_info.get('loc'):
                 die2_loc = die2_info['loc']
             if die2_info and args.die2_label:
@@ -2691,6 +2752,8 @@ def main():
             logger.error("DIE3 only supports .csv format")
         else:
             die3_info = parse_die_csv(args.die3, 'DIE3', logger)
+            if die3_info:
+                die3_info['input_path'] = args.die3
             if die3_info and die3_info.get('loc'):
                 die3_loc = die3_info['loc']
             if die3_info and args.die3_label:
@@ -2709,6 +2772,151 @@ def main():
         if args.pkg: pg.generate_pkg_pdf(f"{prefix}_pkg.pdf")
         if args.combined: pg.generate_combined_pdf(f"{prefix}_combined.pdf")
         logger.dedent()
+
+    # Output DIE2/DIE3 bond CSV to output folder (bond netlist 12-column format)
+    d1_name_to_num = parser.d1_name_to_num
+    orig_die_to_new = parser.orig_die_to_new
+
+    BOND_HEADER = "PAD_NO,PAD_NAME,X_COORD,Y_COORD,X_LEN,Y_LEN,FINGER,UPDATE_PAD_NAME,EDIT_FINGER(PAD)_NO,EDIT_FINGER_NAME,PIN_NAME,PASS"
+    for die_label, die_info in [('DIE2', die2_info), ('DIE3', die3_info)]:
+        if die_info and die_info.get('pads'):
+            bond_path = f"{prefix}_{die_label.lower()}_bond.csv"
+            ds = die_info.get('die_size')
+            rotation = die_info.get('rotation', 0)
+            flip_x = die_info.get('flip_x', False)
+
+            # Use original coords (before auto-detection shift) for bond CSV
+            src_pads = die_info.get('pads_original', die_info['pads'])
+
+            # Transform pad coords: apply PLACEMENT (rotation + flip)
+            transformed = []
+            for pad in src_pads:
+                px, py = pad['x'], pad['y']
+                if flip_x:
+                    py = -py
+                rx, ry = rotate_point(px, py, rotation)
+                transformed.append((rx, ry, pad))
+
+            # Detect coord system: any negative → center-based → shift; all positive → bottom-left → no shift
+            if ds:
+                ew, eh = (ds[1], ds[0]) if rotation in (90, 270) else (ds[0], ds[1])
+                txs = [t[0] for t in transformed]
+                tys = [t[1] for t in transformed]
+                is_center = min(txs) < 0 or min(tys) < 0
+                if is_center:
+                    shift_x, shift_y = ew / 2.0, eh / 2.0
+                else:
+                    shift_x, shift_y = 0, 0
+            else:
+                shift_x, shift_y = 0, 0
+
+            # Count D1_PAD occurrences for duplicate suffix
+            d1_pad_count = {}
+            for pad in src_pads:
+                dp = (pad.get('d1_pad', '') or '').strip()
+                if dp:
+                    d1_pad_count[dp] = d1_pad_count.get(dp, 0) + 1
+
+            lines = [BOND_HEADER]
+            d1_pad_seen = {}  # track per-name occurrence index
+            for rx, ry, pad in transformed:
+                bx = round(rx + shift_x, 3)
+                by = round(ry + shift_y, 3)
+
+                pad_no = pad.get('num', '')
+                pad_name = pad.get('name', '')
+                d1_pad = (pad.get('d1_pad', '') or '').strip()
+                typ = (pad.get('type', '') or '').lower()
+
+                # Resolve to (D1.xx) format using reindexed DIE_NUM
+                d1_num_csv = pad.get('d1_num', '').strip()
+                edit_finger_no = ''
+                edit_finger_name = ''
+                pin_name = ''
+                if pad_name.upper() == 'NC':
+                    edit_finger_no = 'NC'
+                elif d1_num_csv:
+                    reindexed = orig_die_to_new.get(d1_num_csv, d1_num_csv)
+                    edit_finger_no = f"(D1.{reindexed})"
+                elif d1_pad:
+                    die_num = d1_name_to_num.get(d1_pad.upper())
+                    if die_num:
+                        edit_finger_no = f"(D1.{die_num})"
+
+                # EDIT_FINGER_NAME: only for power/ground D1_PAD names
+                if d1_pad:
+                    d1_upper = d1_pad.upper()
+                    if any(kw in d1_upper for kw in ('VDD', 'VCC', 'VSS', 'GND', 'VDDQ', 'VSSQ')):
+                        edit_finger_name = d1_pad
+
+                # PIN_NAME: D1_PAD with duplicate suffix
+                if d1_pad:
+                    if d1_pad_count[d1_pad] > 1:
+                        idx = d1_pad_seen.get(d1_pad, 0) + 1
+                        d1_pad_seen[d1_pad] = idx
+                        pin_name = f"{d1_pad}_{idx}"
+                    else:
+                        pin_name = d1_pad
+
+                passed = 0 if d1_pad or typ == 'power' else 1
+
+                # 12 cols: PAD_NO,PAD_NAME,X_COORD,Y_COORD,X_LEN,Y_LEN,FINGER,UPDATE_PAD_NAME,EDIT_FINGER_NO,EDIT_FINGER_NAME,PIN_NAME,PASS
+                lines.append(f"{pad_no},{pad_name},{bx},{by},,,,,{edit_finger_no},{edit_finger_name},{pin_name},{passed}")
+
+            with open(bond_path, 'w') as f:
+                f.write('\n'.join(lines) + '\n')
+            logger.info(f"Bond CSV written: {bond_path} ({len(transformed)} pads, "
+                        f"placement={die_info.get('placement', 'R0')}, "
+                        f"bottom-left origin)")
+
+    # Output DIE2/DIE3 .new.csv with D1_NUM backfilled (original order, with headers)
+    for die_label, die_info in [('die2', die2_info), ('die3', die3_info)]:
+        if die_info and die_info.get('pads'):
+            # Output filename from input CSV: xxx.csv → xxx.new.csv
+            input_csv = die_info.get('input_path', '')
+            if input_csv:
+                base = os.path.splitext(os.path.basename(input_csv))[0]
+                # Strip .pin_list suffix if present
+                base = re.sub(r'\.pin_list$', '', base, flags=re.I)
+                new_csv_path = os.path.join(os.path.dirname(prefix), f"{base}.new.csv")
+            else:
+                new_csv_path = f"{prefix}_{die_label}.new.csv"
+            src_pads = die_info.get('pads_original', die_info['pads'])
+            die_num = die_label[-1]  # '2' or '3'
+            prefix_upper = f"DIE{die_num}"  # DIE2 or DIE3
+
+            # Build header section matching input CSV format
+            csv_lines = []
+            name = die_info.get('name', prefix_upper)
+            csv_lines.append(f"{prefix_upper}_NAME : {name},,,,,")
+            ds = die_info.get('die_size')
+            if ds:
+                csv_lines.append(f"DIE_SIZE : {int(ds[0])}x{int(ds[1])},,,,,")
+            loc = die_info.get('loc')
+            if loc:
+                csv_lines.append(f"{prefix_upper}_LOC : {int(loc[0])},{int(loc[1])},,,,,")
+            placement = die_info.get('placement', 'R0')
+            csv_lines.append(f"PLACEMENT : {placement},,,,,")
+            csv_lines.append(",,,,,")
+            csv_lines.append(f"D{die_num}_NUM,D{die_num}_PAD_NAME,X,Y,D1_NUM,D1_PAD,TYPE")
+
+            # Data rows in original order, resolve D1_NUM to reindexed value
+            for pad in src_pads:
+                d1_pad = pad.get('d1_pad', '').strip()
+                d1_num_csv = pad.get('d1_num', '').strip()
+                if d1_num_csv:
+                    # CSV has D1_NUM: convert original → reindexed via mapping
+                    d1_num_val = orig_die_to_new.get(d1_num_csv, d1_num_csv)
+                elif d1_pad:
+                    # No D1_NUM: look up reindexed DIE_NUM by name
+                    d1_num_val = d1_name_to_num.get(d1_pad.upper(), '')
+                else:
+                    d1_num_val = ''
+                csv_lines.append(f"{pad.get('num','')},{pad.get('name','')},{pad['x']},{pad['y']},{d1_num_val},{d1_pad},{pad.get('type','')}")
+
+            with open(new_csv_path, 'w') as f:
+                f.write('\n'.join(csv_lines) + '\n')
+            logger.info(f"New CSV written: {new_csv_path} ({len(src_pads)} pads, original order)")
 
     logger.info("Execution successful.")
     logger.close()
