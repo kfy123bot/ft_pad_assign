@@ -2008,7 +2008,7 @@ class PDFGen:
             c.rect(x - width/2, y - box_thickness, width, box_thickness, fill=0, stroke=1)
             c.circle(x, y - box_thickness/2, 1.5, stroke=0, fill=1)
 
-    def _draw_ground_symbol(self, c, cx, cy, side, count, idx):
+    def _draw_ground_symbol(self, c, cx, cy, side, count, idx, short_len=7):
         """Draw anchor-dot ground symbol: dot at pin center -> short wire -> ground symbol.
 
         Args:
@@ -2017,9 +2017,9 @@ class PDFGen:
             side: Which side (L/B/R/T) to determine outward direction
             count: Total number of ground wires for this pin
             idx: Which wire (0-based) for offset calculation
+            short_len: Wire length from anchor to ground symbol (default 7)
         """
         offset = (idx - (count - 1) / 2) * 2
-        short_len = 7
         stem_len = 4
 
         # Offset along the pin's long axis
@@ -2370,6 +2370,24 @@ class PDFGen:
             c.drawString(px - label_w / 2, py - font_sz * 0.35, label)
             c.restoreState()
 
+        # Draw downbond ground symbols for D1_NUM=0, TYPE=G pads
+        for pad in pads:
+            d1_num_csv = pad.get('d1_num', '').strip()
+            typ = pad.get('type', '').strip().lower()
+            if d1_num_csv != '0' or typ != 'g':
+                continue
+            rx, ry = rotate_point(pad['x'], pad['y'], rotation)
+            if flip_x:
+                ry = -ry
+            px = die_cx + rx * scale
+            py = die_cy + ry * scale
+            # Determine outward side from die center
+            if abs(rx) >= abs(ry):
+                side = 'L' if rx < 0 else 'R'
+            else:
+                side = 'B' if ry < 0 else 'T'
+            self._draw_ground_symbol(c, px, py, side, 1, 0, short_len=4.67)
+
         # Draw DIE1 connection wires
         if apr_coords:
             d1_name_to_num = self.parser.d1_name_to_num
@@ -2379,6 +2397,8 @@ class PDFGen:
             for pad in pads:
                 d1_pad_name = pad.get('d1_pad', '').strip()
                 d1_num_csv = pad.get('d1_num', '').strip()
+                if d1_num_csv == '0':
+                    continue  # downbond ground, no wire to DIE1
                 if not d1_pad_name:
                     continue
                 conn_type = pad.get('type', 'signal').strip().lower()
@@ -2861,6 +2881,9 @@ def main():
                 pin_name = ''
                 if pad_name.upper() == 'NC':
                     edit_finger_no = 'NC'
+                elif d1_num_csv == '0' and typ == 'g':
+                    edit_finger_name = 'GND'
+                    pin_name = 'GND'
                 elif d1_num_csv:
                     reindexed = orig_die_to_new.get(d1_num_csv, d1_num_csv)
                     edit_finger_no = f"(D1.{reindexed})"
@@ -2868,12 +2891,6 @@ def main():
                     die_num = d1_name_to_num.get(d1_pad.upper())
                     if die_num:
                         edit_finger_no = f"(D1.{die_num})"
-
-                # EDIT_FINGER_NAME: only for power/ground D1_PAD names
-                if d1_pad:
-                    d1_upper = d1_pad.upper()
-                    if any(kw in d1_upper for kw in ('VDD', 'VCC', 'VSS', 'GND', 'VDDQ', 'VSSQ')):
-                        edit_finger_name = d1_pad
 
                 # PIN_NAME: D1_PAD with duplicate suffix
                 if d1_pad:
