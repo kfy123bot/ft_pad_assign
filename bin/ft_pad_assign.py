@@ -304,6 +304,16 @@ def parse_die_csv(filepath, die_prefix, logger):
                     logger.info(f"  PLACEMENT: {val_upper} (rotation={rot}, flip_x={flip})")
                 else:
                     logger.error(f"Invalid PLACEMENT value: '{val}'. Valid: {', '.join(PLACEMENT_TRANSFORMS.keys())}")
+            elif key == 'COORD':
+                val_upper = val.upper().strip()
+                if val_upper in ('C', 'CENTER'):
+                    result['coord_origin'] = 'center'
+                    logger.info(f"  COORD: center (0,0)")
+                elif val_upper in ('BL', 'BOTTOM_LEFT'):
+                    result['coord_origin'] = 'bottom_left'
+                    logger.info(f"  COORD: bottom_left (0,0)")
+                else:
+                    logger.error(f"Invalid COORD value: '{val}'. Valid: C, CENTER, BL, BOTTOM_LEFT")
         else:
             # First non-header, non-blank line → data table starts
             data_start = i
@@ -356,28 +366,38 @@ def parse_die_csv(filepath, die_prefix, logger):
                                  'type': p.get('type', '')}
                                 for p in result['pads']]
 
-    # Auto-detect coordinate origin: bottom-left (0,0) vs center (0,0)
-    # Per-axis: min ≈ 0 AND midpoint far from origin → bottom-left
-    # If ANY axis is bottom-left → shift BOTH axes (same coordinate system)
+    # Coordinate origin: shift bottom-left to center for PDF drawing
     if result['pads'] and result['die_size']:
         w, h = result['die_size']
-        xs = [p['x'] for p in result['pads']]
-        ys = [p['y'] for p in result['pads']]
-        mid_x = (min(xs) + max(xs)) / 2.0
-        mid_y = (min(ys) + max(ys)) / 2.0
+        coord_origin = result.get('coord_origin', '')
 
-        x_bl = min(xs) >= 0 and min(xs) < w * 0.2 and abs(mid_x) > w * 0.2
-        y_bl = min(ys) >= 0 and min(ys) < h * 0.2 and abs(mid_y) > h * 0.2
-
-        if x_bl or y_bl:
-            # Bottom-left detected → shift both axes to center (for PDF drawing)
+        if coord_origin == 'bottom_left':
+            # Explicit COORD : BOTTOM_LEFT → shift by die half-size
             for p in result['pads']:
-                p['x'] = round(p['x'] - mid_x, 3)
-                p['y'] = round(p['y'] - mid_y, 3)
+                p['x'] = round(p['x'] - w / 2.0, 3)
+                p['y'] = round(p['y'] - h / 2.0, 3)
             xs2 = [p['x'] for p in result['pads']]
             ys2 = [p['y'] for p in result['pads']]
-            logger.info(f"  Auto-shifted coords to center (0,0): "
+            logger.info(f"  Shifted BOTTOM_LEFT to center: "
                         f"X [{min(xs2):.1f}, {max(xs2):.1f}], Y [{min(ys2):.1f}, {max(ys2):.1f}]")
+        elif not coord_origin:
+            # No COORD header → auto-detect fallback (midpoint heuristic)
+            xs = [p['x'] for p in result['pads']]
+            ys = [p['y'] for p in result['pads']]
+            mid_x = (min(xs) + max(xs)) / 2.0
+            mid_y = (min(ys) + max(ys)) / 2.0
+
+            x_bl = min(xs) >= 0 and min(xs) < w * 0.2 and abs(mid_x) > w * 0.2
+            y_bl = min(ys) >= 0 and min(ys) < h * 0.2 and abs(mid_y) > h * 0.2
+
+            if x_bl or y_bl:
+                for p in result['pads']:
+                    p['x'] = round(p['x'] - mid_x, 3)
+                    p['y'] = round(p['y'] - mid_y, 3)
+                xs2 = [p['x'] for p in result['pads']]
+                ys2 = [p['y'] for p in result['pads']]
+                logger.info(f"  Auto-shifted coords to center (0,0): "
+                            f"X [{min(xs2):.1f}, {max(xs2):.1f}], Y [{min(ys2):.1f}, {max(ys2):.1f}]")
 
     n_conn = sum(1 for p in result['pads'] if p.get('d1_pad'))
     logger.info(f"  Parsed: {len(result['pads'])} pads ({n_conn} connections)")
@@ -602,7 +622,7 @@ class Parser:
                 continue
             d_num = row['DIE_NUM']
             p_num = row['PKG_NUM']
-            if d_num not in ('0', '-', ''):
+            if d_num not in ('0', '-', '', 'x', 'X'):
                 old_die_num_to_row[d_num] = row
 
             # Check for D1.xx pattern in PKG_NUM
@@ -649,7 +669,10 @@ class Parser:
             idx = 1
             orig_to_new = {}
             for _, _row_idx, orig_die_str, row in reindexable:
-                if orig_die_str in orig_to_new:
+                if orig_die_str.upper() == 'X':
+                    row['DIE_NUM'] = str(idx)
+                    idx += 1
+                elif orig_die_str in orig_to_new:
                     row['DIE_NUM'] = orig_to_new[orig_die_str]
                 else:
                     row['DIE_NUM'] = str(idx)
@@ -1019,7 +1042,7 @@ class Parser:
                 continue
             d_num = row['DIE_NUM']
             p_num = row['PKG_NUM']
-            if d_num not in ('0', '-', ''):
+            if d_num not in ('0', '-', '', 'x', 'X'):
                 old_die_num_to_row[d_num] = row
             match = re.search(r'D1\.(\d+)', p_num.upper())
             if match:
@@ -1049,7 +1072,10 @@ class Parser:
                     row['DIE_NUM'] = '0'
                 else:
                     orig_die = row['DIE_NUM']
-                    if orig_die in orig_to_new:
+                    if orig_die.upper() == 'X':
+                        row['DIE_NUM'] = str(idx)
+                        idx += 1
+                    elif orig_die in orig_to_new:
                         # Duplicate DIE_NUM: reuse the same new number
                         row['DIE_NUM'] = orig_to_new[orig_die]
                     else:
@@ -2858,10 +2884,8 @@ def main():
                     else:
                         pin_name = d1_pad
 
-                passed = 0 if d1_pad or typ == 'power' else 1
-
                 # 12 cols: PAD_NO,PAD_NAME,X_COORD,Y_COORD,X_LEN,Y_LEN,FINGER,UPDATE_PAD_NAME,EDIT_FINGER_NO,EDIT_FINGER_NAME,PIN_NAME,PASS
-                lines.append(f"{pad_no},{pad_name},{bx},{by},,,,,{edit_finger_no},{edit_finger_name},{pin_name},{passed}")
+                lines.append(f"{pad_no},{pad_name},{bx},{by},,,,,{edit_finger_no},{edit_finger_name},{pin_name},")
 
             with open(bond_path, 'w') as f:
                 f.write('\n'.join(lines) + '\n')
@@ -2897,6 +2921,9 @@ def main():
                 csv_lines.append(f"{prefix_upper}_LOC : {int(loc[0])},{int(loc[1])},,,,,")
             placement = die_info.get('placement', 'R0')
             csv_lines.append(f"PLACEMENT : {placement},,,,,")
+            coord = die_info.get('coord_origin', '')
+            if coord:
+                csv_lines.append(f"COORD : {coord},,,,,")
             csv_lines.append(",,,,,")
             csv_lines.append(f"D{die_num}_NUM,D{die_num}_PAD_NAME,X,Y,D1_NUM,D1_PAD,TYPE")
 
