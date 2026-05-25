@@ -10,6 +10,7 @@ import csv
 import io
 import os
 import sys
+import math
 import re
 
 try:
@@ -22,7 +23,7 @@ except ImportError:
 
 import datetime
 
-VERSION = "v3.4"
+VERSION = "v3.8"
 
 # --- Logger Class ---
 class Logger:
@@ -452,6 +453,7 @@ class Parser:
                     continue
                 if pname not in self.d1_name_to_num:
                     self.d1_name_to_num[pname] = row['DIE_NUM']
+            self._check_xy_proximity()
             self._parse_die_size()
             self._extract_cell_from_pin_name()
         except Exception as e:
@@ -505,24 +507,8 @@ class Parser:
                         return val if val != '' else '-'
                 return '-'
 
-            # Skip Inner_bond rows - treat as comment, output as-is
-            pkg_num_val = get_field('PKG_NUM')
-            if pkg_num_val.upper() == 'INNER_BOND':
-                row_data = {
-                    'PKG_NUM':      pkg_num_val,
-                    'PKG_PIN_NAME': get_field('PKG_PIN_NAME'),
-                    'DIE_NUM':      get_field('DIE_NUM'),
-                    'DIE_PIN_NAME': get_field('DIE_PIN_NAME'),
-                    'IO_CELL_NAME': get_field('IO_CELL_NAME'),
-                    'PKG_LOC':      get_field('PKG_LOC'),
-                    'DIE_LOC':      get_field('DIE_LOC'),
-                    'DIRECTION':    get_field('DIRECTION'),
-                    'LOAD':         get_field('LOAD'),
-                    'SLEW':         get_field('SLEW'),
-                    'SSO':          get_field('SSO'),
-                    'INST_NAME':    '-'
-                }
-                self.data.append(row_data)
+            # Skip rows containing "inner_bond" in any field
+            if any('INNER_BOND' in v.upper() for v in norm_row.values()):
                 continue
 
             row_data = {
@@ -539,6 +525,10 @@ class Parser:
                 'SSO':          get_field('SSO'),
                 'INST_NAME':    '-'
             }
+            # Optional die pad shape columns (absolute coordinates in um)
+            for col in ('X_COORD', 'Y_COORD', 'X_LEN', 'Y_LEN'):
+                val = norm_row.get(col, '')
+                row_data[col] = float(val) if val and val != '-' else None
             self.data.append(row_data)
 
     def _parse_txt(self, f):
@@ -572,24 +562,8 @@ class Parser:
                                 return v if v.strip() else '-'
                         return '-'
 
-                    # Skip Inner_bond rows - treat as comment, output as-is
-                    pkg_num_val = get_txt_field('PKG_NUM')
-                    if pkg_num_val.upper() == 'INNER_BOND':
-                        row = {
-                            'PKG_NUM':      pkg_num_val,
-                            'PKG_PIN_NAME': get_txt_field('PKG_PIN_NAME'),
-                            'DIE_NUM':      get_txt_field('DIE_NUM'),
-                            'DIE_PIN_NAME': get_txt_field('DIE_PIN_NAME'),
-                            'IO_CELL_NAME': get_txt_field('IO_CELL_NAME'),
-                            'PKG_LOC':      get_txt_field('PKG_LOC'),
-                            'DIE_LOC':      get_txt_field('DIE_LOC'),
-                            'DIRECTION':    get_txt_field('DIRECTION'),
-                            'LOAD':         get_txt_field('LOAD'),
-                            'SLEW':         get_txt_field('SLEW'),
-                            'SSO':          get_txt_field('SSO'),
-                            'INST_NAME':    '-'
-                        }
-                        self.data.append(row)
+                    # Skip rows containing "inner_bond" in any field
+                    if any('INNER_BOND' in c.upper() for c in cols):
                         continue
 
                     row = {
@@ -606,9 +580,21 @@ class Parser:
                         'SSO':          get_txt_field('SSO'),
                         'INST_NAME':    '-'
                     }
+                    # Optional die pad shape columns (absolute coordinates in um)
+                    for col in ('X_COORD', 'Y_COORD', 'X_LEN', 'Y_LEN'):
+                        idx = col_map.get(col)
+                        if idx is not None and idx < len(cols):
+                            v = cols[idx].strip()
+                            row[col] = float(v) if v and v != '-' else None
+                        else:
+                            row[col] = None
                     self.data.append(row)
 
     def _reorder_and_reindex_apr_data(self):
+        # Skip reindexing when absolute die coordinates are present — DIE_NUM is already correct
+        if any(r.get('X_COORD') is not None for r in self.data):
+            self.logger.info("X_COORD detected — skipping DIE_NUM reindexing, using original DIE_NUM.")
+            return
         self.logger.info("Re-indexing DIE_NUM with Dynamic D1.xx Reference Update...")
         
         # 1. Capture original mapping and identify D1.xx references
@@ -693,6 +679,56 @@ class Parser:
                 self.logger.info(f"Updated Dynamic Reference: {orig_pnum} -> {new_pnum} (Target was DIE_NUM {target_xx})")
             else:
                 self.logger.warn(f"D1.xx reference target DIE_NUM={target_xx} not found in reindex map, skipped.")
+
+    def _check_xy_proximity(self):
+        """Check consecutive DIE_NUM pins on the same side for XY distance outliers.
+        If adjacent DIE_NUMs on the same L/B/R/T side are >5x pin shape apart, flag as outlier.
+        """
+        has_shape = any(r.get('X_COORD') is not None for r in self.data)
+        if not has_shape:
+            return
+        # Build list of (numeric_die_num, side, row) for valid signal pins
+        entries = []
+        for row in self.data:
+            dnum = row['DIE_NUM']
+            if dnum in ('0', '-', '') or not dnum:
+                continue
+            pn = row.get('DIE_PIN_NAME', '').upper()
+            if pn in ('NC', 'DOWNBOND'):
+                continue
+            xc = row.get('X_COORD')
+            yc = row.get('Y_COORD')
+            xl = row.get('X_LEN')
+            yl = row.get('Y_LEN')
+            if xc is None or yc is None or xl is None or yl is None:
+                continue
+            # Extract numeric part from DIE_NUM
+            try:
+                n = int(str(dnum).split('.')[-1])
+            except (ValueError, TypeError):
+                continue
+            loc = row.get('DIE_LOC', '').upper()
+            if loc not in ('L', 'B', 'R', 'T'):
+                continue
+            entries.append((n, loc, row))
+        # Sort by numeric DIE_NUM
+        entries.sort(key=lambda x: x[0])
+        # Check consecutive pairs on the same side
+        for i in range(len(entries) - 1):
+            n1, s1, r1 = entries[i]
+            n2, s2, r2 = entries[i + 1]
+            if s1 != s2 or n1 == n2:
+                continue
+            xc1, yc1 = r1['X_COORD'], r1['Y_COORD']
+            xc2, yc2 = r2['X_COORD'], r2['Y_COORD']
+            xl1, yl1 = r1['X_LEN'], r1['Y_LEN']
+            xl2, yl2 = r2['X_LEN'], r2['Y_LEN']
+            dist = math.sqrt((xc2 - xc1) ** 2 + (yc2 - yc1) ** 2)
+            avg_size = ((xl1 + yl1) / 2 + (xl2 + yl2) / 2) / 2
+            threshold = avg_size * 5
+            if dist > threshold:
+                self.logger.error(f"XY_PROXIMITY: DIE_NUM {r1['DIE_NUM']}({s1}) -> {r2['DIE_NUM']}({s2}), dist={dist:.0f}um > {threshold:.0f}um (5x pin shape)")
+                r2['_is_outlier'] = True
 
     def _sanity_check_list(self):
         self.logger.info("Performing Sanity Check on Pin List...")
@@ -1031,6 +1067,8 @@ class Parser:
             )
 
     def bridge_data(self):
+        # Skip reindexing when absolute die coordinates are present — DIE_NUM is already correct
+        has_abs_coords = any(r.get('X_COORD') is not None for r in self.data)
         self.logger.info("Bridging data and re-indexing DIE_NUM with Dynamic Reference Update...")
         
         # 1. Capture original mapping and identify D1.xx references
@@ -1048,51 +1086,55 @@ class Parser:
             if match:
                 referencing_rows.append((row, match.group(1)))
 
-        # 2. Re-indexing logic
-        start_idx = -1
-        for i, row in enumerate(self.data):
-            # Skip special rows
-            if row['PKG_NUM'].upper() == 'INNER_BOND' or row['DIE_NUM'] == '-':
-                continue
-            if row['PKG_LOC'].upper() == 'L' and row['DIE_PIN_NAME'].upper() != 'NC' and row['DIE_NUM'] != '0':
-                start_idx = i
-                break
-
-        if start_idx == -1:
-            self.logger.warn("No L-side signal pin found, DIE_NUM reindexing skipped.")
-        if start_idx != -1:
-            ring_seq = self.data[start_idx:] + self.data[:start_idx]
-            idx = 1
-            orig_to_new = {}  # Map: original DIE_NUM -> new DIE_NUM (for duplicates)
-            for row in ring_seq:
+        # 2. Re-indexing logic (skip when absolute die coordinates are present)
+        if has_abs_coords:
+            self.logger.info("X_COORD detected — skipping DIE_NUM reindexing in bridge_data.")
+        else:
+            start_idx = -1
+            for i, row in enumerate(self.data):
                 # Skip special rows
                 if row['PKG_NUM'].upper() == 'INNER_BOND' or row['DIE_NUM'] == '-':
                     continue
-                if row['DIE_PIN_NAME'].upper() == 'NC' or row['DIE_NUM'] == '0':
-                    row['DIE_NUM'] = '0'
-                else:
-                    orig_die = row['DIE_NUM']
-                    if orig_die.upper() == 'X':
-                        row['DIE_NUM'] = str(idx)
-                        idx += 1
-                    elif orig_die in orig_to_new:
-                        # Duplicate DIE_NUM: reuse the same new number
-                        row['DIE_NUM'] = orig_to_new[orig_die]
-                    else:
-                        # New DIE_NUM: assign new number
-                        row['DIE_NUM'] = str(idx)
-                        orig_to_new[orig_die] = str(idx)
-                        idx += 1
+                if row['PKG_LOC'].upper() == 'L' and row['DIE_PIN_NAME'].upper() != 'NC' and row['DIE_NUM'] != '0':
+                    start_idx = i
+                    break
 
-        # 3. Dynamic Update for D1.xx
-        for ref_row, target_xx in referencing_rows:
-            if target_xx in old_die_num_to_row:
-                target_row_obj = old_die_num_to_row[target_xx]
-                new_val = target_row_obj['DIE_NUM']
-                orig_pnum = ref_row['PKG_NUM']
-                new_pnum = re.sub(r'D1\.\d+', f'D1.{new_val}', orig_pnum, flags=re.I)
-                ref_row['PKG_NUM'] = new_pnum
-                self.logger.info(f"Updated Dynamic Reference (Bridge): {orig_pnum} -> {new_pnum}")
+            if start_idx == -1:
+                self.logger.warn("No L-side signal pin found, DIE_NUM reindexing skipped.")
+            if start_idx != -1:
+                ring_seq = self.data[start_idx:] + self.data[:start_idx]
+                idx = 1
+                orig_to_new = {}  # Map: original DIE_NUM -> new DIE_NUM (for duplicates)
+                for row in ring_seq:
+                    # Skip special rows
+                    if row['PKG_NUM'].upper() == 'INNER_BOND' or row['DIE_NUM'] == '-':
+                        continue
+                    if row['DIE_PIN_NAME'].upper() == 'NC' or row['DIE_NUM'] == '0':
+                        row['DIE_NUM'] = '0'
+                    else:
+                        orig_die = row['DIE_NUM']
+                        if orig_die.upper() == 'X':
+                            row['DIE_NUM'] = str(idx)
+                            idx += 1
+                        elif orig_die in orig_to_new:
+                            # Duplicate DIE_NUM: reuse the same new number
+                            row['DIE_NUM'] = orig_to_new[orig_die]
+                        else:
+                            # New DIE_NUM: assign new number
+                            row['DIE_NUM'] = str(idx)
+                            orig_to_new[orig_die] = str(idx)
+                            idx += 1
+
+        # 3. Dynamic Update for D1.xx (skip when absolute die coordinates are present)
+        if not has_abs_coords:
+            for ref_row, target_xx in referencing_rows:
+                if target_xx in old_die_num_to_row:
+                    target_row_obj = old_die_num_to_row[target_xx]
+                    new_val = target_row_obj['DIE_NUM']
+                    orig_pnum = ref_row['PKG_NUM']
+                    new_pnum = re.sub(r'D1\.\d+', f'D1.{new_val}', orig_pnum, flags=re.I)
+                    ref_row['PKG_NUM'] = new_pnum
+                    self.logger.info(f"Updated Dynamic Reference (Bridge): {orig_pnum} -> {new_pnum}")
 
         # --- Bridging Logic ---
         _skip_names = {'NC', 'DOWNBOND', 'POWERCUT', '-', ''}
@@ -1453,12 +1495,18 @@ class PDFGen:
             apr_pin_sz = 100.0 * edge_apr_x / max(die_size[0], die_size[1])
         else:
             apr_pin_sz = 6
+        # Die pin shape support: compute scale from die coords (um) to PDF points
+        die_shape_scale = None
+        die_shape_origin = None
+        if die_size and any(r.get('X_COORD') is not None for r in self.parser.data):
+            die_shape_scale = (edge_apr_x / die_size[0], edge_apr_y / die_size[1])
+            die_shape_origin = (cx - edge_apr_x/2, cy - edge_apr_y/2)
         for side in ('L', 'B', 'R', 'T'):
             pkg_len = self._side_length(side, edge_pkg_x, edge_pkg_y)
             apr_len = self._side_length(side, edge_apr_x, edge_apr_y)
             p_coords = self._draw_side_boxes(c, side, pkg_data_by_side[side], cx, cy, pkg_len, getattr(self, f"_{side}_pos")(cx, cy, edge_pkg_x, edge_pkg_y), max_cnt, 'PKG', label_inside=False, pin_dims=pin_dims_pkg, pin_inside=True)
             pkg_coords.update(p_coords)
-            a_coords = self._draw_side_boxes(c, side, apr_data_by_side[side], cx, cy, apr_len, getattr(self, f"_{side}_pos")(cx, cy, edge_apr_x, edge_apr_y), max_cnt, 'APR', label_inside=False, max_label_extent=apr_lim[side], hollow_pg=True, skip_start_dot=True, pin_inside=True, apr_pin_size=apr_pin_sz)
+            a_coords = self._draw_side_boxes(c, side, apr_data_by_side[side], cx, cy, apr_len, getattr(self, f"_{side}_pos")(cx, cy, edge_apr_x, edge_apr_y), max_cnt, 'APR', label_inside=False, max_label_extent=apr_lim[side], hollow_pg=True, skip_start_dot=True, pin_inside=True, apr_pin_size=apr_pin_sz, die_shape_scale=die_shape_scale, die_shape_origin=die_shape_origin, frame_edge_x=edge_apr_x, frame_edge_y=edge_apr_y)
             apr_coords.update(a_coords)
 
         c.setLineWidth(0.3)
@@ -1476,7 +1524,9 @@ class PDFGen:
                 p_cx, p_cy = p_pt['pt']
                 p_bw, p_bh = p_pt['bw'], p_pt['bh']
                 p_side = p_pt['side']
-                if p_side == 'L':
+                if p_pt.get('has_shape'):
+                    wire_start = p_pt['pt']
+                elif p_side == 'L':
                     wire_start = (p_cx + p_bw/2, p_cy)
                 elif p_side == 'R':
                     wire_start = (p_cx - p_bw/2, p_cy)
@@ -1493,17 +1543,20 @@ class PDFGen:
                 a_bh = a_pt['bh']
                 # APR pin center: pin_inside=True means pin extends inward from frame edge
                 # 'pt' is at frame edge; actual center is box_len/2 inward
-                pin_cx, pin_cy = a_wedge
-                if a_side == 'L':
-                    wire_end = (pin_cx + a_bw/2, pin_cy)
-                elif a_side == 'R':
-                    wire_end = (pin_cx - a_bw/2, pin_cy)
-                elif a_side == 'B':
-                    wire_end = (pin_cx, pin_cy + a_bh/2)
-                elif a_side == 'T':
-                    wire_end = (pin_cx, pin_cy - a_bh/2)
-                else:
+                if a_pt.get('has_shape'):
                     wire_end = a_wedge
+                else:
+                    pin_cx, pin_cy = a_wedge
+                    if a_side == 'L':
+                        wire_end = (pin_cx + a_bw/2, pin_cy)
+                    elif a_side == 'R':
+                        wire_end = (pin_cx - a_bw/2, pin_cy)
+                    elif a_side == 'B':
+                        wire_end = (pin_cx, pin_cy + a_bh/2)
+                    elif a_side == 'T':
+                        wire_end = (pin_cx, pin_cy - a_bh/2)
+                    else:
+                        wire_end = a_wedge
 
                 dir_color = colors.grey
                 if row['DIRECTION'] == 'P': dir_color = colors.red
@@ -1512,8 +1565,10 @@ class PDFGen:
 
                 c.setFillColor(dir_color)
                 c.setFillAlpha(0.5)
-                c.circle(wire_start[0], wire_start[1], 1.5, stroke=0, fill=1)
-                c.circle(wire_end[0], wire_end[1], 1.5, stroke=0, fill=1)
+                p_dot_r = min(1.5, min(p_pt['bw'], p_pt['bh']) / 4)
+                a_dot_r = min(1.5, min(a_pt['bw'], a_pt['bh']) / 4)
+                c.circle(wire_start[0], wire_start[1], p_dot_r, stroke=0, fill=1)
+                c.circle(wire_end[0], wire_end[1], a_dot_r, stroke=0, fill=1)
 
         # Draw inner bond red lines for D1.xx connections
         # Rule: PKG_NUM=D1.xx + DIE_NUM=yy means xx -> yy (regardless of parentheses)
@@ -1548,8 +1603,8 @@ class PDFGen:
             drawn_extended_pins = set()
 
             for (source, dest), rows in direction_map.items():
-                pin_src = apr_coords.get(source)
-                pin_dst = apr_coords.get(dest)
+                pin_src = apr_coords.get(source) or apr_coords.get(f"D1.{source}")
+                pin_dst = apr_coords.get(dest) or apr_coords.get(f"D1.{dest}")
                 if not pin_src or not pin_dst:
                     continue
 
@@ -1563,8 +1618,9 @@ class PDFGen:
                 side_dst = pin_dst['side']
 
                 dir_src = dir_dst = None
+                source_d1 = f"D1.{source}"
                 for r in self.parser.data:
-                    if r['DIE_NUM'] == source:
+                    if r['DIE_NUM'] in (source, source_d1):
                         dir_src = r['DIRECTION']
                     if r['DIE_NUM'] == dest:
                         dir_dst = r['DIRECTION']
@@ -1577,15 +1633,24 @@ class PDFGen:
                 color_src = get_pin_color(dir_src) if dir_src else colors.black
                 color_dst = get_pin_color(dir_dst) if dir_dst else colors.black
 
-                ext_src = self._extend_point_toward_center(pt_src, side_src, bh_src, cx, cy)
-                ext_dst = self._extend_point_toward_center(pt_dst, side_dst, bh_dst, cx, cy)
+                has_src_shape = pin_src.get('has_shape')
+                has_dst_shape = pin_dst.get('has_shape')
 
-                # Draw extended pin shapes only once per unique pin
-                if (source, side_src) not in drawn_extended_pins:
+                if has_src_shape:
+                    ext_src = pt_src  # Use absolute pin center directly
+                else:
+                    ext_src = self._extend_point_toward_center(pt_src, side_src, bh_src, cx, cy)
+                if has_dst_shape:
+                    ext_dst = pt_dst  # Use absolute pin center directly
+                else:
+                    ext_dst = self._extend_point_toward_center(pt_dst, side_dst, bh_dst, cx, cy)
+
+                # Draw extended pin shapes only when no absolute coordinates
+                if not has_src_shape and (source, side_src) not in drawn_extended_pins:
                     c.setStrokeColor(colors.red); c.setLineWidth(0.5)
                     self._draw_extended_pin(c, pt_src, side_src, bw_src, bh_src, color_src)
                     drawn_extended_pins.add((source, side_src))
-                if (dest, side_dst) not in drawn_extended_pins:
+                if not has_dst_shape and (dest, side_dst) not in drawn_extended_pins:
                     c.setStrokeColor(colors.red); c.setLineWidth(0.5)
                     self._draw_extended_pin(c, pt_dst, side_dst, bw_dst, bh_dst, color_dst)
                     drawn_extended_pins.add((dest, side_dst))
@@ -1647,7 +1712,9 @@ class PDFGen:
             side = apr_pin['side']
 
             # pin_inside=True: pin extends inward, center is at pt + half-dimension
-            if side == 'L':
+            if apr_pin.get('has_shape'):
+                cx_c, cy_c = pt
+            elif side == 'L':
                 cx_c, cy_c = pt[0] + bw / 2, pt[1]
             elif side == 'R':
                 cx_c, cy_c = pt[0] - bw / 2, pt[1]
@@ -1658,8 +1725,16 @@ class PDFGen:
             else:
                 continue
 
+            # For absolutely-positioned pins, compute outward direction from actual position
+            if apr_pin.get('has_shape'):
+                dist_L = cx_c - (cx - edge_apr_x/2)
+                dist_R = (cx + edge_apr_x/2) - cx_c
+                dist_B = cy_c - (cy - edge_apr_y/2)
+                dist_T = (cy + edge_apr_y/2) - cy_c
+                side = min([('L', dist_L), ('R', dist_R), ('B', dist_B), ('T', dist_T)], key=lambda x: x[1])[0]
+            g_dot_r = min(1.5, min(bw, bh) / 4)
             for i in range(count):
-                self._draw_ground_symbol(c, cx_c, cy_c, side, count, i)
+                self._draw_ground_symbol(c, cx_c, cy_c, side, count, i, dot_r=g_dot_r)
 
             self.logger.info(f"  Ground/DB: key={coord_key}, count={count}")
 
@@ -1749,12 +1824,18 @@ class PDFGen:
             apr_pin_sz = 100.0 * edge_x / max(die_size[0], die_size[1])
         else:
             apr_pin_sz = 6
+        # Die pin shape support: compute scale from die coords (um) to PDF points
+        die_shape_scale = None
+        die_shape_origin = None
+        if die_size and any(r.get('X_COORD') is not None for r in self.parser.data):
+            die_shape_scale = (edge_x / die_size[0], edge_y / die_size[1])
+            die_shape_origin = (cx - edge_x/2, cy - edge_y/2)
         apr_coords_apr = {}
         for side in ('L', 'B', 'R', 'T'):
             limit = apr_edge[side]
             if side == 'T': limit = header_bottom
             side_len = self._side_length(side, edge_x, edge_y)
-            a_coords = self._draw_side_boxes(c, side, data_by_side[side], cx, cy, side_len, getattr(self, f"_{side}_pos")(cx, cy, edge_x, edge_y), max_cnt, 'APR', label_inside=False, max_label_extent=limit, allow_overflow=True, pin_inside=True, apr_pin_size=apr_pin_sz)
+            a_coords = self._draw_side_boxes(c, side, data_by_side[side], cx, cy, side_len, getattr(self, f"_{side}_pos")(cx, cy, edge_x, edge_y), max_cnt, 'APR', label_inside=False, max_label_extent=limit, allow_overflow=True, pin_inside=True, apr_pin_size=apr_pin_sz, die_shape_scale=die_shape_scale, die_shape_origin=die_shape_origin, frame_edge_x=edge_x, frame_edge_y=edge_y)
             apr_coords_apr.update(a_coords)
         self._draw_scale_bar(c, edge_x, edge_y, 'APR', width)
         self._draw_timestamp(c)
@@ -1821,7 +1902,7 @@ class PDFGen:
     def _R_pos(self, cx, cy, edge_x, edge_y=None): return (cx + edge_x/2, cy)
     def _T_pos(self, cx, cy, edge_x, edge_y=None): return (cx, cy + (edge_y or edge_x)/2)
 
-    def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False, max_label_extent=None, allow_overflow=False, hollow_pg=False, skip_start_dot=False, pin_dims=None, pin_inside=False, apr_pin_size=None):
+    def _draw_side_boxes(self, c, side, pins, cx, cy, length, b_pos, total, mode, label_inside=False, max_label_extent=None, allow_overflow=False, hollow_pg=False, skip_start_dot=False, pin_dims=None, pin_inside=False, apr_pin_size=None, die_shape_scale=None, die_shape_origin=None, frame_edge_x=None, frame_edge_y=None):
         bx, by = b_pos; coords = {}
         if not pins: return coords
         actual_cnt = len(pins); calc_total = max(actual_cnt, total)
@@ -1861,7 +1942,23 @@ class PDFGen:
             else:
                 display_name = pname.split('%', 1)[0] if '%' in pname else pname
             px, py = 0, 0; bw, bh = 0, 0
-            if side == 'L':
+            # Absolute positioning when pin has X_COORD/Y_COORD/X_LEN/Y_LEN shape data
+            x_coord = pin.get('X_COORD')
+            y_coord = pin.get('Y_COORD')
+            x_len = pin.get('X_LEN')
+            y_len = pin.get('Y_LEN')
+            has_shape = (x_coord is not None and y_coord is not None and
+                         x_len is not None and y_len is not None and
+                         die_shape_scale is not None)
+            if has_shape:
+                sx, sy = die_shape_scale
+                ox, oy = die_shape_origin
+                bw = x_len * sx
+                bh = y_len * sy
+                px = ox + x_coord * sx - bw / 2
+                py = oy + y_coord * sy - bh / 2
+                coords[pin['PKG_NUM'] if mode == 'PKG' else pin['DIE_NUM']] = {'pt': (px + bw/2, py + bh/2), 'bw': bw, 'bh': bh, 'side': side, 'has_shape': True}
+            elif side == 'L':
                 bw, bh = box_len, box_thickness
                 px = bx if pin_inside else (bx - (0 if label_inside else bw))
                 py = (by + length/2) - margin - ((idx - 1) * step) - (bh/2)
@@ -1881,56 +1978,71 @@ class PDFGen:
                 px = (bx + length/2) - margin - ((idx - 1) * step) - (bw/2)
                 py = by - bh if pin_inside else (by - (bh if label_inside else 0))
                 coords[pin['PKG_NUM'] if mode == 'PKG' else pin['DIE_NUM']] = {'pt': (px + bw/2, by), 'bw': bw, 'bh': bh, 'side': side}
-            c.setLineWidth(0.5); c.setStrokeColor(colors.black); direction = pin['DIRECTION']
+            is_outlier = pin.get('_is_outlier', False)
+            c.setLineWidth(0.5 if is_outlier else (0.25 if has_shape else 0.5))
+            c.setStrokeColor(colors.orange if is_outlier else colors.black); direction = pin['DIRECTION']
             if 'POWERCUT' in pname.upper(): c.setFillColor(colors.black); c.rect(px, py, bw, bh, fill=1)
             elif pname.upper() == 'NC': c.setFillColor(colors.black); c.rect(px, py, bw, bh, fill=1)
-            elif direction == 'P': c.setStrokeColor(colors.red); c.setLineWidth(1.0); c.rect(px, py, bw, bh, fill=0)
-            elif direction == 'G': c.setStrokeColor(colors.blue); c.setLineWidth(1.0); c.rect(px, py, bw, bh, fill=0)
+            elif direction == 'P': c.setStrokeColor(colors.orange if is_outlier else colors.red); c.rect(px, py, bw, bh, fill=0)
+            elif direction == 'G': c.setStrokeColor(colors.orange if is_outlier else colors.blue); c.rect(px, py, bw, bh, fill=0)
             else: c.rect(px, py, bw, bh, fill=0)
             c.setFillColor(colors.black)
-            small_font = font_size
-            if max_label_extent is not None and not allow_overflow:
-                name_len = len(display_name)
-                header_bottom = 510 if side == 'T' else None
-                limit = max_label_extent
-                if side == 'T' and header_bottom is not None:
-                    limit = min(limit, header_bottom) if limit else header_bottom
+            # Skip label for DOWNBOND pins (PKG_NUM=0, DIRECTION=G) in APR mode
+            is_downbond = (mode == 'APR' and pin.get('PKG_NUM') == '0' and pin.get('DIRECTION') == 'G')
+            if not is_downbond:
+                small_font = font_size
+                if max_label_extent is not None and not allow_overflow:
+                    name_len = len(display_name)
+                    header_bottom = 510 if side == 'T' else None
+                    limit = max_label_extent
+                    if side == 'T' and header_bottom is not None:
+                        limit = min(limit, header_bottom) if limit else header_bottom
 
-                if side == 'L':
-                    available_width = px - 4 - limit
-                elif side == 'R':
-                    available_width = limit - (px + bw + 4)
-                elif side == 'B':
-                    available_width = (py - 4) - limit
-                elif side == 'T':
-                    available_width = limit - (py + bh + 4)
+                    if side == 'L':
+                        available_width = px - 4 - limit
+                    elif side == 'R':
+                        available_width = limit - (px + bw + 4)
+                    elif side == 'B':
+                        available_width = (py - 4) - limit
+                    elif side == 'T':
+                        available_width = limit - (py + bh + 4)
 
-                for try_font in range(int(font_size), 1, -1):
-                    char_width = try_font * 0.6
-                    if name_len * char_width <= available_width:
-                        small_font = try_font
-                        break
-                    small_font = max(2, try_font)
-            c.setFont("Helvetica", small_font)
-            if side == 'L':
-                c.drawRightString(px - 4, py + (bh/2) - (small_font/2), display_name)
-            elif side == 'R':
-                c.drawString(px + bw + 4, py + (bh/2) - (small_font/2), display_name)
-            elif side == 'T':
-                c.saveState()
-                c.translate(px + bw/2, py + bh + 2)
-                c.rotate(90); c.drawString(0, -small_font/2, display_name)
-                c.restoreState()
-            elif side == 'B':
-                c.saveState()
-                c.translate(px, py - 4)
-                c.rotate(270); c.drawString(0, 0, display_name)
-                c.restoreState()
+                    for try_font in range(int(font_size), 1, -1):
+                        char_width = try_font * 0.6
+                        if name_len * char_width <= available_width:
+                            small_font = try_font
+                            break
+                        small_font = max(2, try_font)
+                c.setFont("Helvetica", small_font)
+                c.setFillColor(colors.orange if is_outlier else colors.black)
+                # For has_shape pins, use actual position to determine closest edge
+                lbl_side = side
+                if has_shape and frame_edge_x is not None and frame_edge_y is not None:
+                    pcx, pcy = px + bw/2, py + bh/2
+                    fL = cx - frame_edge_x/2; fR = cx + frame_edge_x/2
+                    fB = cy - frame_edge_y/2; fT = cy + frame_edge_y/2
+                    dists = [('L', pcx - fL), ('R', fR - pcx), ('B', pcy - fB), ('T', fT - pcy)]
+                    lbl_side = min(dists, key=lambda x: x[1])[0]
+                if lbl_side == 'L':
+                    c.drawRightString(px - 4, py + (bh/2) - (small_font/2), display_name)
+                elif lbl_side == 'R':
+                    c.drawString(px + bw + 4, py + (bh/2) - (small_font/2), display_name)
+                elif lbl_side == 'T':
+                    c.saveState()
+                    c.translate(px + bw/2, py + bh + 2)
+                    c.rotate(90); c.drawString(0, -small_font/2, display_name)
+                    c.restoreState()
+                elif lbl_side == 'B':
+                    c.saveState()
+                    c.translate(px, py - 4)
+                    c.rotate(270); c.drawString(0, 0, display_name)
+                    c.restoreState()
 
             # --- Pin Numbering (1, 5, 10...) and Start Dot (Pin 1) ---
             num_str = pin['DIE_NUM'] if mode == 'APR' else pin['PKG_NUM']
             try:
-                n_int = int(num_str)
+                # Handle D1.xx format (when reindexing is skipped)
+                n_int = int(str(num_str).split('.')[-1]) if '.' in str(num_str) else int(num_str)
                 # 1. Draw Start Dot (Top-Left marker: always first pin of Side L)
                 draw_dot = (side == 'L' and idx == 1)
 
@@ -1954,13 +2066,27 @@ class PDFGen:
                 # 2. Draw Numbering (1, 5, 10...)
                 if n_int == 1 or n_int % 5 == 0:
                     c.setFont("Helvetica", font_size)
-                    c.setFillColor(colors.black)
+                    c.setFillColor(colors.orange if is_outlier else colors.black)
                     # APR pin_inside: number shifts past pin shape to avoid overlap
                     n_off = (bw if side in ('L', 'R') else bh) if (mode == 'APR' and pin_inside) else 0
-                    if side == 'L': c.drawString(bx + 2 + n_off, py + (bh/2) - (font_size/2), num_str)
-                    elif side == 'R': c.drawRightString(bx - 2 - n_off, py + (bh/2) - (font_size/2), num_str)
-                    elif side == 'T': c.drawCentredString(px + bw/2, by - font_size - n_off, num_str)
-                    elif side == 'B': c.drawCentredString(px + bw/2, by + 2 + n_off, num_str)
+                    if side == 'L': c.drawString(bx + 6 + n_off, py + (bh/2) - (font_size/2), num_str)
+                    elif side == 'R': c.drawRightString(bx - 6 - n_off, py + (bh/2) - (font_size/2), num_str)
+                    elif side == 'T':
+                        if has_shape:
+                            c.saveState()
+                            c.translate(px + bw/2, py - 22)
+                            c.rotate(90); c.drawString(0, 0, num_str)
+                            c.restoreState()
+                        else:
+                            c.drawCentredString(px + bw/2, py + (bh/2) - (font_size/2), num_str)
+                    elif side == 'B':
+                        if has_shape:
+                            c.saveState()
+                            c.translate(px + bw/2, py + bh + 10)
+                            c.rotate(270); c.drawString(0, 0, num_str)
+                            c.restoreState()
+                        else:
+                            c.drawCentredString(px + bw/2, py + (bh/2) - (font_size/2), num_str)
             except (ValueError, TypeError):
                 pass
         return coords
@@ -2008,7 +2134,7 @@ class PDFGen:
             c.rect(x - width/2, y - box_thickness, width, box_thickness, fill=0, stroke=1)
             c.circle(x, y - box_thickness/2, 1.5, stroke=0, fill=1)
 
-    def _draw_ground_symbol(self, c, cx, cy, side, count, idx, short_len=7):
+    def _draw_ground_symbol(self, c, cx, cy, side, count, idx, short_len=7, dot_r=1.5):
         """Draw anchor-dot ground symbol: dot at pin center -> short wire -> ground symbol.
 
         Args:
@@ -2034,7 +2160,7 @@ class PDFGen:
         c.setLineWidth(1.0)
 
         # Anchor dot
-        c.circle(ax, ay, 1.5, stroke=0, fill=1)
+        c.circle(ax, ay, dot_r, stroke=0, fill=1)
 
         if side == 'L':
             end_x, end_y = ax - short_len, ay
@@ -2599,8 +2725,8 @@ class Writer:
                  and r['DIE_NUM'] not in ('0', '-', '')
                  and r['PKG_NUM'].upper() != 'INNER_BOND'
                  and r.get('INST_NAME', '-') not in ('-', '')],
-                key=lambda x: int(x['DIE_NUM']))
-            
+                key=lambda x: int(str(x['DIE_NUM']).split('.')[-1]) if '.' in str(x['DIE_NUM']) else int(x['DIE_NUM']))
+
             sides = {'L': [], 'B': [], 'R': [], 'T': []}
             seen_insts = set()
             for row in sorted_data:
@@ -2635,7 +2761,7 @@ class Writer:
                  and r['DIE_NUM'] not in ('0', '-', '')
                  and r['PKG_NUM'].upper() != 'INNER_BOND'
                  and r.get('INST_NAME', '-') not in ('-', '')],
-                key=lambda x: int(x['DIE_NUM']))
+                key=lambda x: int(str(x['DIE_NUM']).split('.')[-1]) if '.' in str(x['DIE_NUM']) else int(x['DIE_NUM']))
             
             sides = {'L': [], 'B': [], 'R': [], 'T': []}
             seen_insts = set()
@@ -2749,7 +2875,7 @@ def main():
         if not args.compact:
             w.generate_completed_list(f"{prefix}.new")
         w.generate_completed_csv(f"{prefix}.new.csv")
-        if args.v:
+        if args.v and not any(r.get('X_COORD') is not None for r in parser.data):
             w.generate_innovus_io(f"{prefix}_chip.inn.const")
             w.generate_icc2_io(f"{prefix}_chip.icc2.const")
         logger.dedent()
