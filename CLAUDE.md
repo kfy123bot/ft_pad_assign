@@ -33,7 +33,8 @@ Three Python tools in `bin/`:
 
 | Tool | Purpose |
 |------|---------|
-| `ft_pad_assign.py` (~2740 lines) | Main tool: parse pin lists, generate PDFs and constraint files |
+| `ft_pad_assign.py` (~2937 lines) | Main tool: parse pin lists, generate PDFs and constraint files |
+| `bond_netlist_to_csv.py` | Convert bond netlist `.xlsx` to DIE2/DIE3 overlay CSV format |
 | `gen_spec_pdf.py` | Generate CSV input specification PDF doc |
 | `gen_ug_excel.py` | Generate user guide Excel doc |
 
@@ -44,12 +45,12 @@ Input File (.csv / .pin_list)
        │
        ▼
    Parser  ──→  self.header  (dict: PRODUCTION NO, PACKAGE, DIE_SIZE, etc.)
-    (L96)       self.data    (list[dict]: one dict per pin row)
+    (L413)      self.data    (list[dict]: one dict per pin row)
                 self.die_size (tuple[int,int] | None)
        │
-       ├──── PDFGen  (L740)  ──→  PKG / APR / Combined PDFs
-       ├──── Writer  (L1521) ──→  .new, .new.csv, .inn.const, .icc2.const
-       └──── Checker (L1495) ──→  _stagger.rpt
+       ├──── PDFGen  (L1199) ──→  PKG / APR / Combined PDFs
+       ├──── Checker (L2432) ──→  _stagger.rpt
+       └──── Writer  (L2458) ──→  .new, .new.csv, .inn.const, .icc2.const
 ```
 
 **Parse order** (in `parse_list()`):
@@ -74,7 +75,7 @@ CSV or tab-separated. Header section (`KEY : VALUE`), then data table.
 ### Data Columns (10 fields, aliases supported)
 `PKG_NUM`, `DIE_NUM`, `PIN_NAME`, `IO_CELL_NAME`, `PKG_LOC`, `DIE_LOC`, `DIRECTION`, `LOAD`, `SLEW`, `SSO`
 
-Field aliases are defined in `FIELD_ALIASES` (L70) — e.g. `PIN_NUM` → `PKG_NUM`, `DIE_PAD_NUM` → `DIE_NUM`.
+Field aliases are defined in `FIELD_ALIASES` (L93) — e.g. `PIN_NUM` → `PKG_NUM`, `DIE_PAD_NUM` → `DIE_NUM`.
 
 ## Special Pin Types
 
@@ -115,10 +116,10 @@ Three modes: standalone PKG, standalone APR, Combined (PKG + APR + wires).
 - APR pins in Combined PDF: `label_inside=False` (placed at outer edge of APR frame)
 - Scale bar: bottom-right of every PDF, showing physical dimensions in um
 
-### QFN Body Size Lookup (`QFN_BODY_SIZES`, L86)
+### QFN Body Size Lookup (`QFN_BODY_SIZES`, L109)
 Maps pin count → body size in mm. Used when `PKG_SIZE` header is absent. 0.5mm pitch assumed; 0.4mm pitch auto-detected when die exceeds standard body.
 
-### QFN Physical Dimensions (`QFN_PHYSICAL_SPECS`, L100)
+### QFN Physical Dimensions (`QFN_PHYSICAL_SPECS`, L121)
 Source: JEDEC MO-220 specs in `docs/`. Stores `(body_mm, pitch_mm, pin_width_typ_mm, pin_length_typ_mm, exposed_pad_mm)` per body size. Used for accurate pin pad drawing in PDFs.
 
 ## DIE2 / DIE3 Overlay
@@ -200,8 +201,10 @@ Innovus/ICC2 constraint files only generated when `-v` (verilog) is provided.
 |--------|-------------|
 | `make test_py` | Test Python version against all examples in `examples/` |
 | `make test_die2` | Test DIE2 overlay on all examples |
-| `make test_die3` | Test DIE2+DIE3 overlay on all examples |
-| `make run` | Quick single-file test (qfn56 GPIO with verilog) |
+| `make test_die3_cent` | Test DIE2+DIE3 overlay (Flash_4MB_GD + PSRAM_8MB) |
+| `make test_die3_orig` | Test DIE2+DIE3 overlay (Flash_2MB_EON + PSRAM_8MB) |
+| `make test_die3_compact` | DIE2+DIE3 overlay in compact mode |
+| `make run` | Quick single-file test with DIE2+DIE3 overlay and compact mode |
 | `make build` | Compile C++ version |
 | `make test_cpp` | Compile and test C++ version |
 | `make test_pl` | Test Perl version |

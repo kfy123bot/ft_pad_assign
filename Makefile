@@ -29,7 +29,10 @@ test_py:
 	done
 	@echo "Python tests complete."
 run:
-	python3 $(PY_BIN) -list examples/qfn56.8803.GPIO.0505_v3_test.pgpin_list.csv -v examples/va8803.vg -all -o test_out --die3 examples/PSRAM_8MB.pin_list.csv --die2 examples/Flash_4MB_GD.pin_list.csv --compact; \
+	python3 $(PY_BIN) -list examples/pinlist_xy_0525.csv -v examples/va8803_apr.vg -all -o test_out --compact; \
+
+runbak:
+	python3 $(PY_BIN) -list examples/pinlist_xy.csv -v examples/va8803_apr.vg -all -o test_out --die3 examples/PSRAM_8MB.pin_list.csv --die2 examples/Flash_4MB_GD.pin_list.csv --compact; \
 
 # 2b. Test DIE2 Overlay (all examples + DIE2 on 8803 examples)
 test_die2:
