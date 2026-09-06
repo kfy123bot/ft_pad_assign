@@ -1,0 +1,241 @@
+
+module  chip_top(
+    inout   PAD_RX_VDDA33,
+    inout   PAD_RX_VLDO11,
+    inout   PAD_RX_VSSA11,
+    inout   MIPI_CSI_RX_L0P,
+    inout   MIPI_CSI_RX_L0N,
+    inout   MIPI_CSI_RX_L1P,
+    inout   MIPI_CSI_RX_L1N,
+    inout   MIPI_CSI_RX_CLKP,
+    inout   MIPI_CSI_RX_CLKN,
+    inout   VDD33_IOB,
+    inout   PAD_VTEST,
+    inout   PIO_0,
+    inout   PIO_1,
+    inout   PIO_2,
+    inout   TEST,
+    inout   RESETN,
+    inout   LDO_EN,
+    inout   PIO_3,
+    inout   PIO_4,
+    inout   PIO_5,
+    inout   PIO_6,
+    inout   VDD33_BAT,
+    inout   VBAT_PIO_0,
+    inout   VBAT_PIO_1,
+    inout   VBAT_PIO_2,
+    inout   VBAT_PIO_3,
+    inout   VBAT_PIO_4,
+    inout   VBAT_PIO_5,
+    inout   VBAT_PIO_6,
+    inout   VBAT_PIO_7,
+    inout   GND_XTAL,
+    inout   LEXT_IN,
+    inout   LEXT_OUT,
+    inout   VBAT_PIO_8,
+    inout   PIO_7,
+    inout   PIO_8,
+    inout   PIO_9,
+    inout   PIO_10,
+    inout   PIO_11,
+    inout   PIO_12,
+    inout   PIO_13,
+    inout   PIO_14,
+    inout   PIO_15,
+    inout   PIO_16,
+    inout   PIO_17,
+    inout   PAD_DDR_VDDA33,
+    inout   PAD_DDR_VSSA33,
+    inout   PAD_DDR_VLDO,
+    inout   PAD_CKB,
+    inout   PAD_CK,
+    inout   PAD_CEB,
+    inout   PAD_LDM,
+    inout   PAD_DQSB,
+    inout   PAD_DQS,
+    inout   PAD_DQ7,
+    inout   PAD_DQ6,
+    inout   PAD_DQ5,
+    inout   PAD_DQ4,
+    inout   PAD_CK_LS,
+    inout   PAD_CKB_LS,
+    inout   PAD_CEB_LS,
+    inout   PAD_DQ3,
+    inout   PAD_DQ2,
+    inout   PAD_DQ1,
+    inout   PAD_DQ0,
+    inout   PAD_RESB,
+    inout   PIO_18,
+    inout   PIO_19,
+    inout   PIO_20,
+    inout   PIO_21,
+    inout   PIO_22,
+    inout   PIO_23,
+    inout   PIO_24,
+    inout   PIO_25,
+    inout   PIO_26,
+    inout   PIO_27,
+    inout   PIO_28,
+    inout   PIO_29,
+    inout   PIO_30,
+    inout   PIO_31,
+    inout   PAD_AUDIO_VSS33,
+    inout   PAD_AUDIO_LOUT,
+    inout   PAD_AUDIO_MICBIAS,
+    inout   PAD_AUDIO_IN,
+    inout   PAD_AUDIO_VDD33,
+    inout   QSPI0_WP,
+    inout   QSPI0_DO,
+    inout   QSPI0_CS,
+    inout   VDD33_FLS,
+    inout   QSPI0_HOLD,
+    inout   QSPI0_CLK,
+    inout   QSPI0_DI,
+    inout   GND_OSC,
+    inout   VDD33_OSC,
+    inout   VDD33_PLL,
+    inout   GND_PLL
+);
+
+U40_AIP_CENTRAL_09A         U_CENTRAL       ();
+U40_LDO_APR_300MA_02A       U_LDO_APR       ();
+
+U40_EFUSE_CTRL_03A          U_EFUSE_CTRL    ();
+RCC4MMEFHD64X8D40           U_EFUSE         ();
+
+U40_ADC_02A                 U_ADC           ();
+U40_DAC_02A                 U_DAC           ();
+U40_COMP_02A                U_COMP          ();
+U40_AUDIO_CODEC_01A         U_AUDIO         (
+    .PAD_AUDIO_VSS33    (   PAD_AUDIO_VSS33    ),
+    .PAD_AUDIO_LOUT     (   PAD_AUDIO_LOUT     ),
+    .PAD_AUDIO_MICBIAS  (   PAD_AUDIO_MICBIAS  ),
+    .PAD_AUDIO_IN       (   PAD_AUDIO_IN       ),
+    .PAD_AUDIO_VDD33    (   PAD_AUDIO_VDD33    )
+);
+
+U40_PSRAMPHY_2P0G_01A       U_PSRAMPHY      (
+    .PAD_DDR_VDDA33     (   PAD_DDR_VDDA33     ),
+    .PAD_DDR_VSSA33     (   PAD_DDR_VSSA33     ),
+    .PAD_DDR_VLDO       (   PAD_DDR_VLDO       ),
+    .PAD_CKB            (   PAD_CKB            ),
+    .PAD_CK             (   PAD_CK             ),
+    .PAD_CEB            (   PAD_CEB            ),
+    .PAD_LDM            (   PAD_LDM            ),
+    .PAD_DQSB           (   PAD_DQSB           ),
+    .PAD_DQS            (   PAD_DQS            ),
+    .PAD_DQ7            (   PAD_DQ7            ),
+    .PAD_DQ6            (   PAD_DQ6            ),
+    .PAD_DQ5            (   PAD_DQ5            ),
+    .PAD_DQ4            (   PAD_DQ4            ),
+    .PAD_CK_LS          (   PAD_CK_LS          ),
+    .PAD_CKB_LS         (   PAD_CKB_LS         ),
+    .PAD_CEB_LS         (   PAD_CEB_LS         ),
+    .PAD_DQ3            (   PAD_DQ3            ),
+    .PAD_DQ2            (   PAD_DQ2            ),
+    .PAD_DQ1            (   PAD_DQ1            ),
+    .PAD_DQ0            (   PAD_DQ0            ),
+    .PAD_RESB           (   PAD_RESB           )
+);
+
+U40_MIPIRXPHY_1P5G_02A      U_RX            (
+    .PAD_RX_VDDA33      (   PAD_RX_VDDA33      ),
+    .PAD_RX_VLDO11      (   PAD_RX_VLDO11      ),
+    .PAD_RX_VSSA11      (   PAD_RX_VSSA11      ),
+    .MIPI_CSI_RX_L0P    (   MIPI_CSI_RX_L0P    ),
+    .MIPI_CSI_RX_L0N    (   MIPI_CSI_RX_L0N    ),
+    .MIPI_CSI_RX_L1P    (   MIPI_CSI_RX_L1P    ),
+    .MIPI_CSI_RX_L1N    (   MIPI_CSI_RX_L1N    ),
+    .MIPI_CSI_RX_CLKP   (   MIPI_CSI_RX_CLKP   ),
+    .MIPI_CSI_RX_CLKN   (   MIPI_CSI_RX_CLKN   )
+);
+
+U40_OSC_48M_01A             U_OSC           (
+    .GND_OSC            (   GND_OSC            ),
+    .VDD33_OSC          (   VDD33_OSC          )
+);
+U40_GBPLL_2P0G_06A          U_SYSPLL        (
+    .VDD33_PLL          (   VDD33_PLL          ),
+    .GND_PLL            (   GND_PLL            )
+);
+
+U40_AIO_PH_D8_L191D_01A     U_LDO_EN        (.LDO_EN(LDO_EN         ));
+U40_AIO_RESET_D8_L191_01A   U_RESETN        (.RESETN(RESETN         ));
+
+U40_GPIO_5V_D8_L191D_01A    U_TEST          (.PAD(TEST              ));
+U40_GPIO_5V_D8_L191D_01A    U_VTEST          (.PAD(PAD_VTEST              ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_0         (.PAD(PIO_0             ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_1         (.PAD(PIO_1             ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_2         (.PAD(PIO_2             ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_3         (.PAD(PIO_3             ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_4         (.PAD(PIO_4             ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_5         (.PAD(PIO_5             ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_6         (.PAD(PIO_6             ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_7         (.PAD(PIO_7             ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_8         (.PAD(PIO_8             ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_9         (.PAD(PIO_9             ));
+
+U40_GPIO_5V_D8_L191D_01A    U_PIO_10        (.PAD(PIO_10            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_11        (.PAD(PIO_11            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_12        (.PAD(PIO_12            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_13        (.PAD(PIO_13            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_14        (.PAD(PIO_14            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_15        (.PAD(PIO_15            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_16        (.PAD(PIO_16            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_17        (.PAD(PIO_17            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_18        (.PAD(PIO_18            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_19        (.PAD(PIO_19            ));
+
+U40_GPIO_5V_D8_L191D_01A    U_PIO_20        (.PAD(PIO_20            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_21        (.PAD(PIO_21            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_22        (.PAD(PIO_22            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_23        (.PAD(PIO_23            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_24        (.PAD(PIO_24            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_25        (.PAD(PIO_25            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_26        (.PAD(PIO_26            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_27        (.PAD(PIO_27            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_28        (.PAD(PIO_28            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_29        (.PAD(PIO_29            ));
+
+U40_GPIO_5V_D8_L191D_01A    U_PIO_30        (.PAD(PIO_30            ));
+U40_GPIO_5V_D8_L191D_01A    U_PIO_31        (.PAD(PIO_31            ));
+
+U40_GPIO_5V_D8_L191D_01A    U_QSPI_WP       (.PAD(QSPI_WP           ));
+U40_GPIO_5V_D8_L191D_01A    U_QSPI_DO       (.PAD(QSPI_DO           ));
+U40_GPIO_5V_D8_L191D_01A    U_QSPI_CS       (.PAD(QSPI_CS           ));
+U40_GPIO_5V_D8_L191D_01A    U_QSPI_HOLD     (.PAD(QSPI_HOLD         ));
+U40_GPIO_5V_D8_L191D_01A    U_QSPI_CL       (.PAD(QSPI_CL           ));
+U40_GPIO_5V_D8_L191D_01A    U_QSPI_DI       (.PAD(QSPI_DI           ));
+
+U40_OSC_100K_01A            U_OSC_RTC       ();
+U40_XTAL_32K_01A            U_XTAL_RTC      (
+    .GND_XTAL       (   GND_XTAL       ),
+    .LEXT_IN        (   LEXT_IN        ),
+    .LEXT_OUT       (   LEXT_OUT       )
+);
+U40_AIP_CENTRAL_RTC_01A     U_CENTRAL_RTC   ();
+U40_LDO_PADEN_10MA_02A      U_LDO_RTC       (.VDD33_BAT(VDD33_BAT   ));
+
+U40_GPIO_5V_D8_L191D_01A    U_VBAT_PIO_0    (.PAD(VBAT_PIO_0        ));
+U40_GPIO_5V_D8_L191D_01A    U_VBAT_PIO_1    (.PAD(VBAT_PIO_1        ));
+U40_GPIO_5V_D8_L191D_01A    U_VBAT_PIO_2    (.PAD(VBAT_PIO_2        ));
+U40_GPIO_5V_D8_L191D_01A    U_VBAT_PIO_3    (.PAD(VBAT_PIO_3        ));
+U40_GPIO_5V_D8_L191D_01A    U_VBAT_PIO_4    (.PAD(VBAT_PIO_4        ));
+U40_GPIO_5V_D8_L191D_01A    U_VBAT_PIO_5    (.PAD(VBAT_PIO_5        ));
+U40_GPIO_5V_D8_L191D_01A    U_VBAT_PIO_6    (.PAD(VBAT_PIO_6        ));
+U40_GPIO_5V_D8_L191D_01A    U_VBAT_PIO_7    (.PAD(VBAT_PIO_7        ));
+U40_GPIO_5V_D8_L191D_01A    U_VBAT_PIO_8    (.PAD(VBAT_PIO_8        ));
+
+U40_PC_LVD_D9_S210_01A  U_PAD_VDDD11_1 ();
+U40_PC_LVD_D9_S210_01A  U_PAD_VDDD11_2 ();
+U40_PC_LVD_D9_S210_01A  U_PAD_VDDD11_3 ();
+U40_PC_HVD_D9_S210_01A  U_PAD_VDDA33_1 ();
+U40_PC_HVD_D9_S210_01A  U_PAD_VDDA33_2 ();
+U40_PC_HVD_D9_S210_01A  U_PAD_VDDA33_3 ();
+U40_PC_HVD_D9_S210_01A  U_PAD_VDDA33_4 ();
+U40_PC_HV_GNDX2_D9_S210_01A  U_PAD_GNDA_1 ();
+U40_PC_HV_GNDX2_D9_S210_01A  U_PAD_GNDA_2 ();
+U40_PC_HV_GNDX2_D9_S210_01A  U_PAD_GNDA_3 ();
+
+endmodule
